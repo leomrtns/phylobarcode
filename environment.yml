@@ -5,11 +5,11 @@ channels:
   - defaults
 dependencies:
   - python>3.7
-  - primer3
+  - primer3>2.6.0
   - pip
-  - biopython>1.68
-  - scikit-bio 
+  - biopython>1.70
   - scikit-learn 
+  - numpy>1.22.2
   - python-xxhash>2.0.0 # equiv to xxhash 0.8.0
   - mafft>7.467
   - xz

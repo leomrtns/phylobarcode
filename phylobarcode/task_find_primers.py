@@ -13,11 +13,11 @@ logger.addHandler(stream_log)
 def find_primers (defaults, fastafile = None, output = None, entry_timestamp = None):
     fas = read_fasta_as_list (fastafile)
     for i in fas[:4]:
-        left, right = get_primers (i.seq, i.id, num_return=4)
-        print (i.id, "\n", left, right)
+        left, right = get_primers (i.seq, i.id, num_return=5)
+        print (i.id, "\n", left, "\n", right)
     
 
-def get_primers (sequence, seqname, primer_opt_size = 21, border = 100, num_return=100):
+def get_primers (sequence, seqname, primer_opt_size = 21, border = 400, num_return=100):
     seqlen = len(sequence)
     primer_task = "pick_primer_list" # "pick_sequencing_primers" "generic" "pick_primer_list"
     primer_min_size = 14
@@ -36,13 +36,16 @@ def get_primers (sequence, seqname, primer_opt_size = 21, border = 100, num_retu
         if border < primer_opt_size:
             logger.info (f"Border is too small for sequence {seqname}")
             return None, None;
+    min_product_size = seqlen - 2 * border - 2 * primer_opt_size;
+    if (min_product_size > 0.8 * seqlen):
+        min_product_size = int(0.8 * seqlen)
 
     arguments = (     # sequence must be in one line, and there must be no extra newlines or spaces
         "PRIMER_PICK_LEFT_PRIMER=1\nPRIMER_PICK_INTERNAL_OLIGO=0\nPRIMER_PICK_RIGHT_PRIMER=1\n"
         f"SEQUENCE_ID={seqname}\nPRIMER_TASK={primer_task}\n"
         f"PRIMER_MIN_SIZE={primer_min_size}\nPRIMER_MAX_SIZE={primer_max_size}\n"
         f"PRIMER_MAX_NS_ACCEPTED={max_n_accepted}\n"
-        f"PRIMER_PRODUCT_SIZE_RANGE={seqlen-2*border-2*primer_opt_size}-{seqlen}\n" # 5000-9500
+        f"PRIMER_PRODUCT_SIZE_RANGE={min_product_size}-{seqlen}\n" # 5000-9500
         f"SEQUENCE_PRIMER_PAIR_OK_REGION_LIST=0,{border},{seqlen-border},{border}\n"  # left, left_len, right, right_len : 0,500,9000,554
         f"PRIMER_NUM_RETURN={num_return}\nPRIMER_OPT_SIZE={primer_opt_size}\n"
         f"SEQUENCE_TEMPLATE={sequence}\n=\n"
@@ -69,7 +72,7 @@ def extract_primer_from_output (output):
 
         idx = [i[0] for i in pseq] + [i[0] for i in ppen] + [i[0] for i in pstart] # flattened version of two index lists (e.g. [0,1,2...,0,1,2...])
         min_idx = min(idx) ## make sure it starts from 0 (which is already the case in current version of primer3...)
-        spl = [[None,None,None] for i in range (max(idx) - min_idx)] ## length = max between two lists flattened
+        spl = [[None,None,None] for i in range (max(idx) + 1 - min_idx)] ## length = max between two lists flattened (base_zero -> max +1 is length)
         for i in pseq:
             spl[i[0]-min_idx][0] = i[1]
         for i in ppen:

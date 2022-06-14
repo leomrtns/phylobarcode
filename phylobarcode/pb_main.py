@@ -40,12 +40,13 @@ def main():
     parser.add_argument('-d', '--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.WARNING, help="Print debugging statements (most verbose)")
     parser.add_argument('-v', '--verbose', action="store_const", dest="loglevel", const=logging.INFO, help="Add verbosity")
     parser.add_argument('-t', '--nthreads', metavar='int', help="Number of threads requested (default = maximum available)")
+    parser.add_argument('--timestamp', help="optional timestamp for naming new files. You can safely ignore it, otherwise use format YYMMDD")
     parser.add_argument('--outdir', action="store", help="Output database directory. Default: working directory")
     subp= parser.add_subparsers(dest='command')
 
     up_aln = subp.add_parser('find_primers', help="find primers given an alignment")
-    up_aln.add_argument('-s', '--fasta', metavar='fas', nargs='+', required=True, help="unaligned sequences")
-    up_aln.add_argument('-o', '--output', metavar='aln', help="optional file name of incremental output alignment (i.e. only new sequences)")
+    up_aln.add_argument('fasta', help="unaligned sequences")
+    up_aln.add_argument('-o', '--output', metavar='csv', help="optional file name of table with primers")
     up_aln.set_defaults(func = run_find_primers)
 
     args = parser.parse_args()
