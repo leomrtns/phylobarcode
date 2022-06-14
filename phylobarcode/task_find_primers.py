@@ -24,8 +24,8 @@ def find_primers (fastafile = None, primer_opt_size = 20, border = 400, num_retu
     fas = read_fasta_as_list (fastafile)
     ldic = {}
     rdic = {}
-    for i, seqfasta in enumerate(fas[:10]):
-        if not i%20:
+    for i, seqfasta in enumerate(fas):
+        if i and not i%100:
             logger.info (f"Processing sequence {i}")
         left, right = get_primers (seqfasta.seq, seqfasta.id, border = border, num_return = num_return)
         if left is not None:
