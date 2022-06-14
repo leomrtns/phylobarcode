@@ -10,14 +10,52 @@ stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.INFO)
 logger.addHandler(stream_log)
 
-def find_primers (defaults, fastafile = None, output = None, entry_timestamp = None):
-    fas = read_fasta_as_list (fastafile)
-    for i in fas[:4]:
-        left, right = get_primers (i.seq, i.id, num_return=5)
-        print (i.id, "\n", left, "\n", right)
-    
+def find_primers (fastafile = None, primer_opt_size = 20, border = 400, num_return = 100, output = None):
+    if primer_opt_size is None:
+        primer_opt_size = 20
+    if border is None:
+        border = 400
+    if num_return is None:
+        num_return = 100
+    if output is None:
+        output = "findprimer." + '%012x' % random.randrange(16**12) 
+        logger.warning (f"No output file specified, writing to file {output}")
 
-def get_primers (sequence, seqname, primer_opt_size = 21, border = 400, num_return=100):
+    fas = read_fasta_as_list (fastafile)
+    ldic = {}
+    rdic = {}
+    for i, seqfasta in enumerate(fas[:10]):
+        if not i%20:
+            logger.info (f"Processing sequence {i}")
+        left, right = get_primers (seqfasta.seq, seqfasta.id, border = border, num_return = num_return)
+        if left is not None:
+            for x in left:
+                if x[0] not in ldic:
+                    ldic[x[0]] = [x[1]]
+                else:
+                    ldic[x[0]].append(x[1])
+        if right is not None:
+            for x in right:
+                if x[0] not in rdic:
+                    rdic[x[0]] = [x[1]]
+                else:
+                    rdic[x[0]].append(x[1])
+    llist = [[k, len(v), sum(v)/len(v), max(v)] for k, v in ldic.items()]
+    rlist = [[k, len(v), sum(v)/len(v), max(v)] for k, v in rdic.items()]
+    llist.sort(key=lambda x: x[1], reverse=True)
+    rlist.sort(key=lambda x: x[1], reverse=True)
+
+    with open (f"{output}_left.csv", "w") as f:
+        f.write ("left,left_len,left_mean,left_max\n")
+        for x in llist:
+            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]}\n")
+    with open (f"{output}_right.csv", "w") as f:
+        f.write ("right,right_len,right_mean,right_max\n")
+        for x in rlist:
+            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]}\n")
+
+
+def get_primers (sequence, seqname, primer_opt_size = 20, border = 400, num_return=100):
     seqlen = len(sequence)
     primer_task = "pick_primer_list" # "pick_sequencing_primers" "generic" "pick_primer_list"
     primer_min_size = 14
@@ -54,9 +92,9 @@ def get_primers (sequence, seqname, primer_opt_size = 21, border = 400, num_retu
                              stdout=subprocess.PIPE, universal_newlines=True, shell=(sys.platform!="win32"))
     output = child.communicate(input=arguments)[0].split("\n")
 
-    return extract_primer_from_output (output)
+    return extract_primer_from_output (output, seqname) # seqname is used in warnings
 
-def extract_primer_from_output (output):
+def extract_primer_from_output (output, seqname):
     '''
     Extracts the primers from the output of primer3_core. Returns lists of left and right primers, with
     [sequence,penalty, position] per primer.
@@ -69,7 +107,9 @@ def extract_primer_from_output (output):
         y=[re.match(f"PRIMER_{side}_(\d+)=(\d+),(\d+)",x) for x in out] ## =start,length (but we dont use length)
         pstart = [[int(i.group(1)),int(i.group(2))] for i in y if i is not None]
         # pseq=[idx, sequence]; ppen=[idx, penalty]; pstart=[idx, start]; we want [sequence,penalty, start]
-
+        if not len(pseq):
+            logger.warning (f"No {side} primers found for sequence {seqname}")
+            return None
         idx = [i[0] for i in pseq] + [i[0] for i in ppen] + [i[0] for i in pstart] # flattened version of two index lists (e.g. [0,1,2...,0,1,2...])
         min_idx = min(idx) ## make sure it starts from 0 (which is already the case in current version of primer3...)
         spl = [[None,None,None] for i in range (max(idx) + 1 - min_idx)] ## length = max between two lists flattened (base_zero -> max +1 is length)
