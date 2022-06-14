@@ -1,0 +1,17 @@
+name: phylobarcode 
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python>3.7
+  - pip
+  - biopython>1.68
+  - scikit-bio 
+  - scikit-learn 
+  - python-xxhash>2.0.0 # equiv to xxhash 0.8.0
+  - mafft>7.467
+  - xz
+  - pip:
+    - .  # this means run pip on this directory's setup.py 
+    - pytools>2020.1
