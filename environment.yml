@@ -5,6 +5,7 @@ channels:
   - defaults
 dependencies:
   - python>3.7
+  - primer3
   - pip
   - biopython>1.68
   - scikit-bio 

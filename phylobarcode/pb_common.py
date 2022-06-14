@@ -3,7 +3,6 @@ from Bio import Seq, SeqIO
 import random, datetime, sys, re, glob, collections, subprocess, itertools, pathlib, base64, string
 import lzma, gzip, bz2
 
-
 logger = logging.getLogger(__name__) 
 logger.propagate = False
 stream_log = logging.StreamHandler()

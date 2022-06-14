@@ -19,6 +19,10 @@ def run_find_primers (args):
     from phylobarcode import task_find_primers
     if args.timestamp is not None and not args.timestamp.isdigit():
         logger.warning(f"provided timestamp '{args.timestamp}' is not numeric, may cause problems downstream. Ideally it would be a YearMonthDay")
+    if not args.output:
+        args.output = os.path.join(defaults["current_dir"], f"{args.timestamp}_primers.txt")
+    else:
+        args.output = os.path.join(defaults["current_dir"], args.output)
     task_find_primers.find_primers (defaults, args.fasta, args.output, args.timestamp)
 
 class ParserWithErrorHelp(argparse.ArgumentParser):

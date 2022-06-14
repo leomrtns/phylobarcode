@@ -42,9 +42,8 @@ setuptools.setup(
     license='GPLv3+',
     install_requires=[
            'biopython >= 1.70',
-           'ete3',
+           'primer3',
            'numpy',
-           'pandas',
            'xxhash >= 0.8.0', # equiv to python-xxhash 2.0.0
            'scikit-learn'
        ],
