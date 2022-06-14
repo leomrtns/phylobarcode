@@ -3,7 +3,7 @@ import os, logging, argparse, sys, pathlib, multiprocessing, datetime
 logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
 logger.propagate = False
 stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode_TOP  %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M%S")
+log_format = logging.Formatter(fmt='phylobarcode_MAIN  %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M%S")
 stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.DEBUG)
 logger.addHandler(stream_log)
