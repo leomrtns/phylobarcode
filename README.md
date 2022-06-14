@@ -1,4 +1,4 @@
-<img src="recipe/phylobarcode.png" height="100">
+<img src="recipe/phylobarcode.png" height="150" align="right">
 
 __Leonardo de Oliveira Martins<sup>1</sup>__
 <br>
