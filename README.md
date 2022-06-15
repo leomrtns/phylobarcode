@@ -7,7 +7,11 @@ __Leonardo de Oliveira Martins<sup>1</sup>__
 <sub>1. Quadram Institute Bioscience, Norwich Research Park, NR4 7UQ, UK</sub>
 
 ## Introduction
-**phylobarcode** is a tool for search and analysis of long operons with phylogenetic signal.
+**Phylobarcode** is a tool to search and analyse long operons with phylogenetic signal.
+
+It can search for potential long segments ('operons' or 'barcodes') which can serve as phylogenetic markers.
+It can then search for potential primers which can be used to amplify the operon.
+And it can be used to reconstruct the evolutionary history of the amplicons.
 
 
 ## Installation
