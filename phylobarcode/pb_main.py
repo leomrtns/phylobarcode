@@ -35,7 +35,7 @@ def run_find_primers (args):
     else:
         args.prefix = os.path.join(defaults["current_dir"], f"{defaults['timestamp']}_primers")
     if args.nthreads and args.nthreads < 2:
-        logger.warning("Single-threaded mode requested by user")
+        logger.info("Single-threaded mode requested by user")
         task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
         return
     try:

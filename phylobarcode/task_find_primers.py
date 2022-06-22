@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json?
-import re
+import re, numpy as np
 
 logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
 logger.propagate = False
@@ -11,12 +11,9 @@ stream_log.setLevel(logging.INFO)
 logger.addHandler(stream_log)
 
 def find_primers (fastafile = None, primer_opt_size = 20, border = 400, num_return = 100, output = None):
-    if primer_opt_size is None:
-        primer_opt_size = 20
-    if border is None:
-        border = 400
-    if num_return is None:
-        num_return = 100
+    if primer_opt_size is None: primer_opt_size = 20
+    if border is None:          border = 400
+    if num_return is None:      num_return = 100
     if output is None:
         output = "findprimer." + '%012x' % random.randrange(16**12) 
         logger.warning (f"No output file specified, writing to file {output}")
@@ -31,15 +28,15 @@ def find_primers (fastafile = None, primer_opt_size = 20, border = 400, num_retu
         if left is not None:
             for x in left:
                 if x[0] not in ldic:
-                    ldic[x[0]] = [x[1]]
+                    ldic[x[0]] = [x[1:]]
                 else:
-                    ldic[x[0]].append(x[1])
+                    ldic[x[0]].append(x[1:])
         if right is not None:
             for x in right:
                 if x[0] not in rdic:
-                    rdic[x[0]] = [x[1]]
+                    rdic[x[0]] = [x[1:]]
                 else:
-                    rdic[x[0]].append(x[1])
+                    rdic[x[0]].append(x[1:])
     save_primers_to_file (ldic, rdic, output)
 
 def get_primers (sequence, seqname, primer_opt_size = 20, border = 400, num_return=100):
@@ -79,15 +76,12 @@ def get_primers (sequence, seqname, primer_opt_size = 20, border = 400, num_retu
                              stdout=subprocess.PIPE, universal_newlines=True, shell=(sys.platform!="win32"))
     output = child.communicate(input=arguments)[0].split("\n")
 
-    return extract_primer_from_output (output, seqname) # seqname is used in warnings
+    return extract_primer_from_output (output, seqname, seqlen) # seqname is used in warnings; seqlen to calculate distance from border
 
 def find_primers_parallel (fastafile = None, primer_opt_size = 20, border = 400, num_return = 100, output = None, nthreads = 2):
-    if primer_opt_size is None:
-        primer_opt_size = 20
-    if border is None:
-        border = 400
-    if num_return is None:
-        num_return = 100
+    if primer_opt_size is None: primer_opt_size = 20
+    if border is None:          border = 400
+    if num_return is None:      num_return = 100
     if output is None:
         output = "findprimer." + '%012x' % random.randrange(16**12) 
         logger.warning (f"No output file specified, writing to files {output}_<suffix>")
@@ -102,7 +96,7 @@ def find_primers_parallel (fastafile = None, primer_opt_size = 20, border = 400,
     logger.info (f"Using {nthreads} threads from those available")
 
     with Pool(nthreads) as p:
-        results = p.map(partial(get_primers_parallel, border=border, num_return=num_return, fasta=fas, ids=chunk_ids), [i for i in range(nthreads)])
+        results = p.map(partial(pool_get_primers_parallel, border=border, num_return=num_return, fasta=fas, ids=chunk_ids), [i for i in range(nthreads)])
     
     ldic = {}
     rdic = {}
@@ -111,19 +105,19 @@ def find_primers_parallel (fastafile = None, primer_opt_size = 20, border = 400,
             if left is not None:
                 for x in left:
                     if x[0] not in ldic:
-                        ldic[x[0]] = [x[1]]
+                        ldic[x[0]] = [x[1:]]
                     else:
-                        ldic[x[0]].append(x[1])
+                        ldic[x[0]].append(x[1:])
             if right is not None:
                 for x in right:
                     if x[0] not in rdic:
-                        rdic[x[0]] = [x[1]]
+                        rdic[x[0]] = [x[1:]]
                     else:
-                        rdic[x[0]].append(x[1])
+                        rdic[x[0]].append(x[1:])
     save_primers_to_file (ldic, rdic, output)
 
 
-def get_primers_parallel (thread_number, border = 400, num_return=100, fasta=None, ids=None):
+def pool_get_primers_parallel (thread_number, border = 400, num_return=100, fasta=None, ids=None):
     res = []
     for i in range(ids[thread_number], ids[thread_number+1]):
         rec = fasta[i]
@@ -131,28 +125,28 @@ def get_primers_parallel (thread_number, border = 400, num_return=100, fasta=Non
         res.append([left, right])
     return res
 
-def save_primers_to_file (ldic, rdic, output):
-    llist = [[k, len(v), sum(v)/len(v), max(v)] for k, v in ldic.items()]
-    rlist = [[k, len(v), sum(v)/len(v), max(v)] for k, v in rdic.items()]
+def save_primers_to_file (ldic, rdic, output): # below, each v = dict[k] = [[penalty1, distance1], [penalty2, distance2], ...] 
+    llist = [[k, len(v), np.amax(v,axis=0)[0], int(np.amin(v,axis=0)[1]), int(np.amax(v,axis=0)[1])] for k, v in ldic.items()]
+    rlist = [[k, len(v), np.amax(v,axis=0)[0], int(np.amin(v,axis=0)[1]), int(np.amax(v,axis=0)[1])] for k, v in rdic.items()]
     llist.sort(key=lambda x: x[1], reverse=True)
     rlist.sort(key=lambda x: x[1], reverse=True)
 
     with open (f"{output}_left.csv", "w") as f:
-        f.write ("left,left_len,left_mean,left_max\n")
+        f.write ("left,frequency,penalty,min_distance,max_distance\n")
         for x in llist:
-            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]}\n")
+            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]},{x[4]}\n")
     with open (f"{output}_right.csv", "w") as f:
-        f.write ("right,right_len,right_mean,right_max\n")
+        f.write ("right,frequency,penalty,min_distance,max_distance\n")
         for x in rlist:
-            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]}\n")
+            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]},{x[4]}\n")
     logger.info (f"Saved primers to {output}_left.csv and {output}_right.csv")
 
-def extract_primer_from_output (output, seqname):
+def extract_primer_from_output (output, seqname, seqlen):
     '''
     Extracts the primers from the output of primer3_core. Returns lists of left and right primers, with
     [sequence,penalty, position] per primer.
     '''
-    def xtract_left_or_right (out, side):
+    def xtract_left_or_right (out, side, seqlen):
         y=[re.match(f"PRIMER_{side}_(\d+)_SEQUENCE=(.*)",x) for x in out] # most will be "None" since won't match
         pseq = [[int(i.group(1)),i.group(2)] for i in y if i is not None]
         y=[re.match(f"PRIMER_{side}_(\d+)_PENALTY=(.*)",x) for x in out] # most will be "None" since won't match
@@ -167,33 +161,17 @@ def extract_primer_from_output (output, seqname):
         min_idx = min(idx) ## make sure it starts from 0 (which is already the case in current version of primer3...)
         spl = [[None,None,None] for i in range (max(idx) + 1 - min_idx)] ## length = max between two lists flattened (base_zero -> max +1 is length)
         for i in pseq:
-            spl[i[0]-min_idx][0] = i[1]
+            spl[i[0]-min_idx][0] = str(i[1]).upper()
         for i in ppen:
             spl[i[0]-min_idx][1] = i[1]
-        for i in pstart:
-            spl[i[0]-min_idx][2] = i[1]
+        if seqlen: # "start" of right primer is actually distance from end of sequence
+            for i in pstart:
+                spl[i[0]-min_idx][2] = seqlen - i[1]
+        else: # start is distance from beginning of sequence
+            for i in pstart:
+                spl[i[0]-min_idx][2] = i[1]
         return [i for i in spl if i[0] is not None]
-    left = xtract_left_or_right (output, "LEFT")
-    right = xtract_left_or_right (output, "RIGHT")
+    left = xtract_left_or_right (output, "LEFT", None)
+    right = xtract_left_or_right (output, "RIGHT", seqlen)
     return left, right
-
-def extract_primer_from_output_legacy (output):
-    pseq_l = [[int(x.split("_")[2]), x.split("=")[1]] for x in output if "_SEQUENCE=" in x and "PRIMER_LEFT_" in x]  # only lines with PRIMER_LEFT_xxx_SEQUENCE
-    pseq_r = [[int(x.split("_")[2]), x.split("=")[1]] for x in output if "_SEQUENCE=" in x and "PRIMER_RIGHT_" in x] # only lines with PRIMER_RIGHT_xxx_SEQUENCE
-    penalty_l = [[int(x.split("_")[2]), x.split("=")[1]] for x in output if "_PENALTY=" in x and "PRIMER_LEFT_" in x]
-    penalty_r = [[int(x.split("_")[2]), x.split("=")[1]] for x in output if "_PENALTY=" in x and "PRIMER_RIGHT_" in x]
-    def seq_penalty_list(pseq, penalty):
-        idx = [i[0] for i in pseq] + [i[0] for i in penalty] # flattened version of two index lists (e.g. [0,1,2...,0,1,2...])
-        min_idx = min(idx) ## make sure it starts from 0 (which is already the case in current version of primer3...)
-        spl = [[None,None] for i in range (max(idx) - min_idx)] ## length = max between two lists flattened
-        for i in pseq:
-            spl[i[0]-min_idx][0] = i[1]
-        for i in penalty:
-            spl[i[0]-min_idx][1] = i[1]
-        return spl
-    pseq_l = seq_penalty_list(pseq_l, penalty_l)
-    pseq_r = seq_penalty_list(pseq_r, penalty_r)
-    return pseq_l, pseq_r
-
-
 
