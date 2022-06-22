@@ -3,7 +3,7 @@ import os, logging, argparse, sys, pathlib, multiprocessing, datetime
 logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
 logger.propagate = False
 stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode_MAIN  %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M%S")
+log_format = logging.Formatter(fmt='phylobarcode_MAIN %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.DEBUG)
 logger.addHandler(stream_log)
@@ -34,7 +34,22 @@ def run_find_primers (args):
         args.prefix = os.path.join(defaults["current_dir"], args.prefix)
     else:
         args.prefix = os.path.join(defaults["current_dir"], f"{defaults['timestamp']}_primers")
-    task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
+    if args.nthreads and args.nthreads < 2:
+        logger.warning("Single-threaded mode requested by user")
+        task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
+        return
+    try:
+        from multiprocessing import Pool
+        from functools import partial
+    except ImportError:
+        logger.warning("Multiprocessing not available, falling back to single-threaded mode")
+        task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
+        return
+
+    if not args.nthreads or args.nthreads > defaults["n_threads"]: args.nthreads = defaults["n_threads"]
+    logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
+    task_find_primers.find_primers_parallel (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix, nthreads=args.nthreads)
+    return
 
 class ParserWithErrorHelp(argparse.ArgumentParser):
     def error(self, message):

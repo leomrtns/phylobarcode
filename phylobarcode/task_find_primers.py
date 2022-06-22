@@ -40,20 +40,7 @@ def find_primers (fastafile = None, primer_opt_size = 20, border = 400, num_retu
                     rdic[x[0]] = [x[1]]
                 else:
                     rdic[x[0]].append(x[1])
-    llist = [[k, len(v), sum(v)/len(v), max(v)] for k, v in ldic.items()]
-    rlist = [[k, len(v), sum(v)/len(v), max(v)] for k, v in rdic.items()]
-    llist.sort(key=lambda x: x[1], reverse=True)
-    rlist.sort(key=lambda x: x[1], reverse=True)
-
-    with open (f"{output}_left.csv", "w") as f:
-        f.write ("left,left_len,left_mean,left_max\n")
-        for x in llist:
-            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]}\n")
-    with open (f"{output}_right.csv", "w") as f:
-        f.write ("right,right_len,right_mean,right_max\n")
-        for x in rlist:
-            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]}\n")
-
+    save_primers_to_file (ldic, rdic, output)
 
 def get_primers (sequence, seqname, primer_opt_size = 20, border = 400, num_return=100):
     seqlen = len(sequence)
@@ -93,6 +80,72 @@ def get_primers (sequence, seqname, primer_opt_size = 20, border = 400, num_retu
     output = child.communicate(input=arguments)[0].split("\n")
 
     return extract_primer_from_output (output, seqname) # seqname is used in warnings
+
+def find_primers_parallel (fastafile = None, primer_opt_size = 20, border = 400, num_return = 100, output = None, nthreads = 2):
+    if primer_opt_size is None:
+        primer_opt_size = 20
+    if border is None:
+        border = 400
+    if num_return is None:
+        num_return = 100
+    if output is None:
+        output = "findprimer." + '%012x' % random.randrange(16**12) 
+        logger.warning (f"No output file specified, writing to files {output}_<suffix>")
+    from multiprocessing import Pool
+    from functools import partial
+
+    fas = read_fasta_as_list (fastafile)
+    if nthreads > len(fas): nthreads = len(fas)
+    chunk_size = len(fas)//nthreads + 1 # no garantee that all threads will be used, specially if chumk_size is small like 2 or 3
+    chunk_ids = [i for i in range(0, len(fas), chunk_size)] + [len(fas)] # from [i] to [i+1] excusive
+    nthreads = len(chunk_ids) - 1
+    logger.info (f"Using {nthreads} threads from those available")
+
+    with Pool(nthreads) as p:
+        results = p.map(partial(get_primers_parallel, border=border, num_return=num_return, fasta=fas, ids=chunk_ids), [i for i in range(nthreads)])
+    
+    ldic = {}
+    rdic = {}
+    for r_threaded in results:
+        for [left,right] in r_threaded:
+            if left is not None:
+                for x in left:
+                    if x[0] not in ldic:
+                        ldic[x[0]] = [x[1]]
+                    else:
+                        ldic[x[0]].append(x[1])
+            if right is not None:
+                for x in right:
+                    if x[0] not in rdic:
+                        rdic[x[0]] = [x[1]]
+                    else:
+                        rdic[x[0]].append(x[1])
+    save_primers_to_file (ldic, rdic, output)
+
+
+def get_primers_parallel (thread_number, border = 400, num_return=100, fasta=None, ids=None):
+    res = []
+    for i in range(ids[thread_number], ids[thread_number+1]):
+        rec = fasta[i]
+        left, right = get_primers (sequence = rec.seq, seqname = rec.id, border = border, num_return = num_return)
+        res.append([left, right])
+    return res
+
+def save_primers_to_file (ldic, rdic, output):
+    llist = [[k, len(v), sum(v)/len(v), max(v)] for k, v in ldic.items()]
+    rlist = [[k, len(v), sum(v)/len(v), max(v)] for k, v in rdic.items()]
+    llist.sort(key=lambda x: x[1], reverse=True)
+    rlist.sort(key=lambda x: x[1], reverse=True)
+
+    with open (f"{output}_left.csv", "w") as f:
+        f.write ("left,left_len,left_mean,left_max\n")
+        for x in llist:
+            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]}\n")
+    with open (f"{output}_right.csv", "w") as f:
+        f.write ("right,right_len,right_mean,right_max\n")
+        for x in rlist:
+            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]}\n")
+    logger.info (f"Saved primers to {output}_left.csv and {output}_right.csv")
 
 def extract_primer_from_output (output, seqname):
     '''
