@@ -1,4 +1,5 @@
 import os, logging, argparse, sys, pathlib, multiprocessing, datetime
+from phylobarcode.__version__ import __version__
 
 logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
 logger.propagate = False
@@ -61,13 +62,15 @@ def main():
     parent_parser = ParserWithErrorHelp(description=long_description, add_help=False)
     parent_group = parent_parser.add_argument_group('Options common to all commands')
     parent_group.add_argument('-d', '--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.WARNING, help="Print debugging statements (most verbose)")
-    parent_group.add_argument('-v', '--verbose', action="store_const", dest="loglevel", const=logging.INFO, help="Add verbosity")
+    parent_group.add_argument('--verbose', action="store_const", dest="loglevel", const=logging.INFO, help="Add verbosity")
     parent_group.add_argument('--nthreads', metavar='int', type=int, help="Number of threads requested (default = maximum available)")
     parent_group.add_argument('--outdir', metavar="</path/dir/>", action="store", help="Output directory. Default: working directory")
     parent_group.add_argument('--prefix', metavar="<no_extension>", help="optional file name --- just the prefix, since suffixes (a.k.a. extensions) are added by the program")
+    parent_group.add_argument('--version', action='version', version=f"%(prog)s {__version__}") ## called with subcommands
 
     # alternative to subp= parent_parser.add_subparsers(dest='command', description=None, title="Commands")
     main_parser = ParserWithErrorHelp(description=long_description, formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    main_parser.add_argument('--version', action='version', version=f"%(prog)s {__version__}") ## called without  subcommands (grouped together with --help)
     subp= main_parser.add_subparsers(dest='Commands', description=None, title="Commands", required=True)
 
     this_help = "Find primers given an alignment file" # help is shown in "prog -h", description is shown in "prog this -h"
