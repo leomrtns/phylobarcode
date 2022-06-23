@@ -21,7 +21,10 @@ And it can be used to reconstruct the evolutionary history of the amplicons.
 
 * `conda`
 * linux 
-* python > 3.7 
+* python=3.9 
+
+The other requirements can be installed with `conda`. In particular `parasail-python` os not available yet for python
+3.10
 
 ### Generate a conda environment
 

@@ -13,8 +13,6 @@ stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.INFO)
 logger.addHandler(stream_log)
 
-with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
-    ratio = reachability_plot[:-1] / reachability_plot[1:]
 
 def cluster_primers_from_csv (csv = None, output = None, nthreads = 1):
     if csv is None: 
@@ -28,8 +26,8 @@ def cluster_primers_from_csv (csv = None, output = None, nthreads = 1):
     #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
     primers = df["primer"].tolist()
     distmat = score_to_distance_matrix_fraction (create_NW_score_matrix(primers), mafft=True)
-    print (distmat)
-    cl = cluster.OPTICS(min_samples=5, metric="precomputed", n_jobs=nthreads).fit(distmat)
+    with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
+        cl = cluster.OPTICS(min_samples=5, metric="precomputed", n_jobs=nthreads).fit(distmat)
     df["cluster"] = cl.labels_
     df.to_csv (f"{output}.csv", sep=",", index=False)
 

@@ -41,11 +41,16 @@ setuptools.setup(
     python_requires = '>={}'.format('.'.join(str(n) for n in min_version)),
     license='GPLv3+',
     install_requires=[
-           'biopython>1.70',
-           'parasail>1.2.3',
-           'numpy>1.22.2',
-           'pandas>1.4.1',
-           'xxhash >= 0.8.0', # equiv to python-xxhash 2.0.0
+           #'biopython>1.70',
+           #'parasail>1.2.3',
+           #'numpy>1.22.2',
+           #'pandas>1.4.1',
+           #'xxhash >= 0.8.0', # equiv to python-xxhash 2.0.0
+           'biopython',
+           'parasail',
+           'numpy',
+           'pandas',
+           'xxhash', 
            'scikit-learn'
        ],
     classifiers = [
@@ -56,7 +61,7 @@ setuptools.setup(
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.10", # conda does not have parasail-python for py3.10, only 3.9...
     ],
     # Installs a "phylobarcode" program which calls phylobarcode.__main__.main()
     #   https://setuptools.readthedocs.io/en/latest/setuptools.html#automatic-script-creation

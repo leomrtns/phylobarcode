@@ -4,17 +4,26 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - python>3.7
-  - primer3>2.6.0
+  - python=3.9 ## bugger! conda doesnt have a parasail 3.10 yet
+  - primer3
   - pip
-  - biopython>1.70
-  - parasail-python>1.2.3
+  - biopython
+  - parasail-python 
   - scikit-learn 
-  - numpy>1.22.2
-  - pandas>1.4.1
-  - python-xxhash>2.0.0 # equiv to xxhash 0.8.0
+  - numpy
+  - pandas
+  - python-xxhash
   - mafft>7.467
   - xz
+    #  - python>3.7
+    #  - primer3>2.6.0
+    #  - pip
+    #  - biopython>1.70
+    #  - parasail-python>1.2.3
+    #  - scikit-learn 
+    #  - numpy>1.22.2
+    #  - pandas>1.4.1
+    #  - python-xxhash>2.0.0 # equiv to xxhash 0.8.0
   - pip:
     - .  # this means run pip on this directory's setup.py 
     - pytools>2020.1
