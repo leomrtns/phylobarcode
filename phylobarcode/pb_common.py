@@ -6,7 +6,7 @@ import lzma, gzip, bz2
 logger = logging.getLogger(__name__) 
 logger.propagate = False
 stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode_BASE %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
+log_format = logging.Formatter(fmt='phylobarcode_common %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.INFO)
 logger.addHandler(stream_log)

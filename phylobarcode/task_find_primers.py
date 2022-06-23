@@ -5,7 +5,7 @@ import re, numpy as np
 logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
 logger.propagate = False
 stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode_PRIM %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
+log_format = logging.Formatter(fmt='phylobarcode_primer %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.INFO)
 logger.addHandler(stream_log)
@@ -15,7 +15,7 @@ def find_primers (fastafile = None, primer_opt_size = 20, border = 400, num_retu
     if border is None:          border = 400
     if num_return is None:      num_return = 100
     if output is None:
-        output = "findprimer." + '%012x' % random.randrange(16**12) 
+        output = "primers." + '%012x' % random.randrange(16**12) 
         logger.warning (f"No output file specified, writing to file {output}")
 
     fas = read_fasta_as_list (fastafile)
@@ -131,15 +131,15 @@ def save_primers_to_file (ldic, rdic, output): # below, each v = dict[k] = [[pen
     llist.sort(key=lambda x: x[1], reverse=True)
     rlist.sort(key=lambda x: x[1], reverse=True)
 
-    with open (f"{output}_left.csv", "w") as f:
-        f.write ("left,frequency,penalty,min_distance,max_distance\n")
+    with open_anyformat (f"{output}_l.csv", "w") as f:
+        f.write (str("primer,frequency,penalty,min_distance,max_distance\n").encode())
         for x in llist:
-            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]},{x[4]}\n")
-    with open (f"{output}_right.csv", "w") as f:
-        f.write ("right,frequency,penalty,min_distance,max_distance\n")
+            f.write (str(f"{x[0]},{x[1]},{x[2]},{x[3]},{x[4]}\n").encode()) # encode() is needed in case output is compressed
+    with open_anyformat (f"{output}_r.csv", "w") as f:
+        f.write (str("primer,frequency,penalty,min_distance,max_distance\n").encode())
         for x in rlist:
-            f.write (f"{x[0]},{x[1]},{x[2]},{x[3]},{x[4]}\n")
-    logger.info (f"Saved primers to {output}_left.csv and {output}_right.csv")
+            f.write (str(f"{x[0]},{x[1]},{x[2]},{x[3]},{x[4]}\n").encode())
+    logger.info (f"Saved primers to {output}_l.csv and {output}_r.csv")
 
 def extract_primer_from_output (output, seqname, seqlen):
     '''

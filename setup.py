@@ -41,8 +41,10 @@ setuptools.setup(
     python_requires = '>={}'.format('.'.join(str(n) for n in min_version)),
     license='GPLv3+',
     install_requires=[
-           'biopython > 1.70',
+           'biopython>1.70',
+           'parasail>1.2.3',
            'numpy>1.22.2',
+           'pandas>1.4.1',
            'xxhash >= 0.8.0', # equiv to python-xxhash 2.0.0
            'scikit-learn'
        ],

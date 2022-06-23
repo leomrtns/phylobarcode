@@ -8,8 +8,10 @@ dependencies:
   - primer3>2.6.0
   - pip
   - biopython>1.70
+  - parasail-python>1.2.3
   - scikit-learn 
   - numpy>1.22.2
+  - pandas>1.4.1
   - python-xxhash>2.0.0 # equiv to xxhash 0.8.0
   - mafft>7.467
   - xz

@@ -1,10 +1,10 @@
-import os, logging, argparse, sys, pathlib, multiprocessing, datetime
+import os, logging, argparse, sys, pathlib, multiprocessing, datetime, itertools, pathlib
 from phylobarcode.__version__ import __version__
 
 logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
 logger.propagate = False
 stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode_MAIN %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
+log_format = logging.Formatter(fmt='phylobarcode___main %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.DEBUG)
 logger.addHandler(stream_log)
@@ -34,7 +34,7 @@ def run_find_primers (args):
     if args.prefix:
         args.prefix = os.path.join(defaults["current_dir"], args.prefix)
     else:
-        args.prefix = os.path.join(defaults["current_dir"], f"{defaults['timestamp']}_primers")
+        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_primers")
     if args.nthreads and args.nthreads < 2:
         logger.info("Single-threaded mode requested by user")
         task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
@@ -51,6 +51,38 @@ def run_find_primers (args):
     logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
     task_find_primers.find_primers_parallel (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix, nthreads=args.nthreads)
     return
+
+def run_cluster_primers (args):
+    from phylobarcode import task_cluster_primers
+    if args.prefix:
+        args.prefix = os.path.join(defaults["current_dir"], args.prefix)
+    else:
+        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_cluster")
+    if not args.nthreads or args.nthreads > defaults["n_threads"]: args.nthreads = defaults["n_threads"]
+    if len(args.csv) < 2: ## "nargs='+'" always returns a list of at least one element (or None, but here it's positional)
+        task_cluster_primers.cluster_primers_from_csv (csv=args.csv[0], output=args.prefix, nthreads=args.nthreads)
+        return
+    uniq = remove_prefix_suffix (args.csv)
+    for infile, outfile in zip (args.csv, uniq):
+        task_cluster_primers.cluster_primers_from_csv (csv=infile, output=f"{args.prefix}_{outfile}", nthreads=args.nthreads)
+    return
+
+def remove_prefix_suffix (strlist):
+    def all_same(x):  # https://stackoverflow.com/a/6719272/204903
+        return all(x[0] == y for y in x)
+    char_tuples = zip(*strlist)
+    fix_tuples  = itertools.takewhile(all_same, char_tuples)
+    prefix = ''.join(x[0] for x in fix_tuples)
+    inverse = [x[::-1] for x in strlist]
+    char_tuples = zip(*inverse)
+    fix_tuples  = itertools.takewhile(all_same, char_tuples)
+    suffix = ''.join(x[0] for x in fix_tuples)
+    suffix = suffix[::-1]
+
+    l_pre = len(prefix) ## we could skip "prefix" and store lenght of fix_tuples but this is more readable
+    l_suf = len(suffix)
+    return [x[l_pre:len(x)-l_suf] for x in strlist] # does not work well for 'lefT' and 'righT' 
+
 
 class ParserWithErrorHelp(argparse.ArgumentParser):
     def error(self, message):
@@ -81,12 +113,17 @@ def main():
     up_findp.add_argument('-n', '--n_primers', metavar='int', type=int, help="how many primers, per sequence, per end, should be returned (default=100)")
     up_findp.set_defaults(func = run_find_primers)
 
+    this_help = "Cluster primers described in csv file;\nIf several csv files are given, default output files will keep their unique names (i.e. without common prefix or suffix)"
+    up_findp = subp.add_parser('cluster_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('csv', nargs="+", help="csv files with primers (each ouput file from 'find_primers')")
+    up_findp.set_defaults(func = run_cluster_primers)
+
     args = main_parser.parse_args()
     logging.basicConfig(level=args.loglevel)
 
     if args.outdir: 
         defaults["current_dir"] = args.outdir = os.path.join(defaults["current_dir"], args.outdir)
-        common.pathlib.Path(defaults["current_dir"]).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
+        pathlib.Path(defaults["current_dir"]).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
 
     if args.nthreads:
         if args.nthreads < 1: args.nthreads = 1
