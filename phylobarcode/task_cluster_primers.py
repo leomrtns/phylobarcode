@@ -25,10 +25,12 @@ def cluster_primers_from_csv (csv = None, output = None, nthreads = 1):
     df = pd.read_csv (csv, compression="infer", sep=",", dtype='unicode')
     #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
     primers = df["primer"].tolist()
+    logger.info(f"Read {len(primers)} primers from file {csv}; will now calculate pairwise distances")
     distmat = score_to_distance_matrix_fraction (create_NW_score_matrix(primers), mafft=True)
     with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
-        cl = cluster.OPTICS(min_samples=5, metric="precomputed", n_jobs=nthreads).fit(distmat)
+        cl = cluster.OPTICS(min_samples=3, metric="precomputed", n_jobs=nthreads).fit(distmat)
     df["cluster"] = cl.labels_
+    logger.info(f"Clustering done, writing to file {output}")
     df.to_csv (f"{output}.csv", sep=",", index=False)
 
 def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seqs don't need to be aligned, must be strings
