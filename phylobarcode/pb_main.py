@@ -12,7 +12,7 @@ logger.addHandler(stream_log)
 defaults = {
     "current_dir": os.getcwd() + "/",
     "timestamp": datetime.datetime.now().strftime("%y%m%d_%H%M%S"),
-    "n_threads": multiprocessing.cpu_count(),
+    "nthreads": multiprocessing.cpu_count(),
 #   "reference": os.path.join( os.path.dirname(os.path.abspath(__file__)), "data/MN908947.3.fas") 
     }
 
@@ -47,7 +47,7 @@ def run_find_primers (args):
         task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
         return
 
-    if not args.nthreads or args.nthreads > defaults["n_threads"]: args.nthreads = defaults["n_threads"]
+    if not args.nthreads: args.nthreads = defaults["nthreads"]
     logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
     task_find_primers.find_primers_parallel (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix, nthreads=args.nthreads)
     return
@@ -58,13 +58,33 @@ def run_cluster_primers (args):
         args.prefix = os.path.join(defaults["current_dir"], args.prefix)
     else:
         args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_cluster")
-    if not args.nthreads or args.nthreads > defaults["n_threads"]: args.nthreads = defaults["n_threads"]
     if len(args.csv) < 2: ## "nargs='+'" always returns a list of at least one element (or None, but here it's positional)
         task_cluster_primers.cluster_primers_from_csv (csv=args.csv[0], output=args.prefix, nthreads=args.nthreads)
         return
+    if not args.nthreads: args.nthreads = defaults["nthreads"]
     uniq = remove_prefix_suffix (args.csv)
     for infile, outfile in zip (args.csv, uniq):
         task_cluster_primers.cluster_primers_from_csv (csv=infile, output=f"{args.prefix}_{outfile}", nthreads=args.nthreads)
+    return
+
+def run_blast_primers (args):
+    from phylobarcode import task_blast_primers
+    if args.prefix:
+        args.prefix = os.path.join(defaults["current_dir"], args.prefix)
+    else:
+        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_blast")
+    if len(args.csv) != 2:
+        logger.error("Exactly two CSV files must be provided (left and right, in order)")
+        return
+    uniq = remove_prefix_suffix (args.csv)
+    output = [f"{args.prefix}_{outfile}" for outfile in uniq]
+    if args.accurate: task = "blastn-short"
+    else: task = "blastn"
+    if args.max_target_seqs > 1e9: args.max_target_seqs = 1e9
+    if args.max_target_seqs < 1: args.max_target_seqs = 1
+    if not args.nthreads: args.nthreads = defaults["nthreads"]
+    task_blast_primers.blast_primers_from_csv (csv=args.csv, output=output, database = args.database, evalue=args.evalue, 
+            task=task, max_target_seqs = args.max_target_seqs, nthreads=args.nthreads)
     return
 
 def remove_prefix_suffix (strlist):
@@ -83,7 +103,6 @@ def remove_prefix_suffix (strlist):
     l_suf = len(suffix)
     return [x[l_pre:len(x)-l_suf] for x in strlist] # does not work well for 'lefT' and 'righT' 
 
-
 class ParserWithErrorHelp(argparse.ArgumentParser):
     def error(self, message):
         sys.stderr.write('error: %s\n' % message)
@@ -93,7 +112,7 @@ class ParserWithErrorHelp(argparse.ArgumentParser):
 def main():
     parent_parser = ParserWithErrorHelp(description=long_description, add_help=False)
     parent_group = parent_parser.add_argument_group('Options common to all commands')
-    parent_group.add_argument('-d', '--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.WARNING, help="Print debugging statements (most verbose)")
+    parent_group.add_argument('--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.WARNING, help="Print debugging statements (most verbose)")
     parent_group.add_argument('--verbose', action="store_const", dest="loglevel", const=logging.INFO, help="Add verbosity")
     parent_group.add_argument('--nthreads', metavar='int', type=int, help="Number of threads requested (default = maximum available)")
     parent_group.add_argument('--outdir', metavar="</path/dir/>", action="store", help="Output directory. Default: working directory")
@@ -118,6 +137,16 @@ def main():
     up_findp.add_argument('csv', nargs="+", help="csv files with primers (each ouput file from 'find_primers')")
     up_findp.set_defaults(func = run_cluster_primers)
 
+    this_help = "Blast primers against database, checking for left-right pairs;\n Needs exactly two CSV files, with \
+            left and right primers respect. Output files will keep their unique names (i.e. without common prefix or suffix)"
+    up_findp = subp.add_parser('blast_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('csv', nargs=2, help="csv files with left and right primers, respectively (out from 'find_primers' or 'cluster_primers')")
+    up_findp.add_argument('-d', '--database', required=True, help="full path to database prefix")
+    up_findp.add_argument('-e', '--evalue', type=float, default=0.01, help="E-value threshold for blast (default=0.01)")
+    up_findp.add_argument('-m', '--max_target_seqs', type=int, default=100, help="max number of hist per primer (default=100)")
+    up_findp.add_argument('-a', '--accurate', action="store_true", help="use accurate blastn-short (default=regular blastn)")
+    up_findp.set_defaults(func = run_blast_primers)
+
     args = main_parser.parse_args()
     logging.basicConfig(level=args.loglevel)
 
@@ -127,11 +156,9 @@ def main():
 
     if args.nthreads:
         if args.nthreads < 1: args.nthreads = 1
-        max_threads = multiprocessing.cpu_count()
-        if args.nthreads > max_threads:
-            logger.warning(f"Requested {args.nthreads} threads, but only {max_threads} are available. Using {max_threads} instead.")
-            args.nthreads = max_threads
-        defaults["n_threads"] = args.nthreads
+        if args.nthreads > defaults["nthreads"]:
+            logger.warning(f"Requested {args.nthreads} threads, but only {defaults['nthreads']} are available. Using {defaults['nthreads']} instead.")
+            args.nthreads = defaults["nthreads"]
 
     args.func(args) # calls task 
 

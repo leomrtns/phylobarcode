@@ -15,6 +15,7 @@ dependencies:
   - python-xxhash
   - mafft>7.467
   - xz
+  - blast 
     #  - python>3.7
     #  - primer3>2.6.0
     #  - pip
@@ -23,6 +24,7 @@ dependencies:
     #  - scikit-learn 
     #  - numpy>1.22.2
     #  - pandas>1.4.1
+    #  - blast>2.11.0
     #  - python-xxhash>2.0.0 # equiv to xxhash 0.8.0
   - pip:
     - .  # this means run pip on this directory's setup.py 
