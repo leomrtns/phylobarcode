@@ -39,7 +39,7 @@ def run_find_primers (args):
         logger.info("Single-threaded mode requested by user")
         task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
         return
-    try:
+    try: # I could have used the same function with nthreads=1 but I already had this function to benchmark single threaded
         from multiprocessing import Pool
         from functools import partial
     except ImportError:
@@ -47,8 +47,11 @@ def run_find_primers (args):
         task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
         return
 
-    if not args.nthreads: args.nthreads = defaults["nthreads"]
-    logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
+    if not args.nthreads: 
+        args.nthreads = defaults["nthreads"]
+        logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
+    else:
+        logger.info(f"{args.nthreads} threads were requested by user (actual pool may be smaller)")
     task_find_primers.find_primers_parallel (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix, nthreads=args.nthreads)
     return
 
@@ -82,7 +85,11 @@ def run_blast_primers (args):
     else: task = "blastn"
     if args.max_target_seqs > 1e9: args.max_target_seqs = 1e9
     if args.max_target_seqs < 1: args.max_target_seqs = 1
-    if not args.nthreads: args.nthreads = defaults["nthreads"]
+    if not args.nthreads: 
+        args.nthreads = defaults["nthreads"]
+        logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
+    else:
+        logger.info(f"{args.nthreads} threads were requested by user (actual pool may be smaller)")
     task_blast_primers.blast_primers_from_csv (csv=args.csv, output=output, database = args.database, evalue=args.evalue, 
             task=task, max_target_seqs = args.max_target_seqs, nthreads=args.nthreads)
     return
@@ -137,12 +144,12 @@ def main():
     up_findp.add_argument('csv', nargs="+", help="csv files with primers (each ouput file from 'find_primers')")
     up_findp.set_defaults(func = run_cluster_primers)
 
-    this_help = "Blast primers against database, checking for left-right pairs;\n Needs exactly two CSV files, with \
-            left and right primers respect. Output files will keep their unique names (i.e. without common prefix or suffix)"
+    this_help = "Blast primers against database, checking for left-right pairs;\nNeeds exactly two CSV files, with " \
+    "left and right primers respect. Output files will keep their unique names (i.e. without common prefix or suffix)"
     up_findp = subp.add_parser('blast_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('csv', nargs=2, help="csv files with left and right primers, respectively (out from 'find_primers' or 'cluster_primers')")
     up_findp.add_argument('-d', '--database', required=True, help="full path to database prefix")
-    up_findp.add_argument('-e', '--evalue', type=float, default=0.01, help="E-value threshold for blast (default=0.01)")
+    up_findp.add_argument('-e', '--evalue', type=float, default=1., help="E-value threshold for blast (default=1, beware of low values)")
     up_findp.add_argument('-m', '--max_target_seqs', type=int, default=100, help="max number of hist per primer (default=100)")
     up_findp.add_argument('-a', '--accurate', action="store_true", help="use accurate blastn-short (default=regular blastn)")
     up_findp.set_defaults(func = run_blast_primers)

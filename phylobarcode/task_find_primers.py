@@ -116,7 +116,6 @@ def find_primers_parallel (fastafile = None, primer_opt_size = 20, border = 400,
                         rdic[x[0]].append(x[1:])
     save_primers_to_file (ldic, rdic, output)
 
-
 def pool_get_primers_parallel (thread_number, border = 400, num_return=100, fasta=None, ids=None):
     res = []
     for i in range(ids[thread_number], ids[thread_number+1]):
