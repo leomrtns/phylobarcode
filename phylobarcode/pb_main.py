@@ -1,4 +1,4 @@
-import os, logging, argparse, sys, pathlib, multiprocessing, datetime, itertools, pathlib
+import os, logging, argparse, sys, pathlib, multiprocessing, datetime, itertools, pathlib, random
 from phylobarcode.__version__ import __version__
 
 logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
@@ -13,6 +13,7 @@ defaults = {
     "current_dir": os.getcwd() + "/",
     "timestamp": datetime.datetime.now().strftime("%y%m%d_%H%M%S"),
     "nthreads": multiprocessing.cpu_count(),
+    "scratch": '%012x' % random.randrange(16**12),
 #   "reference": os.path.join( os.path.dirname(os.path.abspath(__file__)), "data/MN908947.3.fas") 
     }
 
@@ -27,7 +28,6 @@ epilogue = """
 SPDX-License-Identifier: GPL-3.0-or-later; Copyright (C) 2022-today Leonardo de Oliveira Martins
 https://github.com/quadram-institute-bioscience/phylobarcode\n
 """
-
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
@@ -55,19 +55,31 @@ def run_find_primers (args):
     task_find_primers.find_primers_parallel (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix, nthreads=args.nthreads)
     return
 
+def run_cluster_flanks (args):
+    from phylobarcode import task_cluster
+    if args.prefix:
+        args.prefix = os.path.join(defaults["current_dir"], args.prefix)
+    else:
+        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_flank")
+    if not args.nthreads: args.nthreads = defaults["nthreads"]
+    task_cluster.cluster_flanks_from_fasta (fastafile=args.fasta, output=args.prefix, border=args.border,
+            identity=args.id, nthreads=args.nthreads, scratch=args.scratch)
+    return
+
+
 def run_cluster_primers (args):
-    from phylobarcode import task_cluster_primers
+    from phylobarcode import task_cluster
     if args.prefix:
         args.prefix = os.path.join(defaults["current_dir"], args.prefix)
     else:
         args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_cluster")
     if len(args.csv) < 2: ## "nargs='+'" always returns a list of at least one element (or None, but here it's positional)
-        task_cluster_primers.cluster_primers_from_csv (csv=args.csv[0], output=args.prefix, nthreads=args.nthreads)
+        task_cluster.cluster_primers_from_csv (csv=args.csv[0], output=args.prefix, nthreads=args.nthreads)
         return
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     uniq = remove_prefix_suffix (args.csv)
     for infile, outfile in zip (args.csv, uniq):
-        task_cluster_primers.cluster_primers_from_csv (csv=infile, output=f"{args.prefix}_{outfile}", nthreads=args.nthreads)
+        task_cluster.cluster_primers_from_csv (csv=infile, output=f"{args.prefix}_{outfile}", nthreads=args.nthreads)
     return
 
 def run_blast_primers (args):
@@ -118,11 +130,12 @@ class ParserWithErrorHelp(argparse.ArgumentParser):
 
 def main():
     parent_parser = ParserWithErrorHelp(description=long_description, add_help=False)
-    parent_group = parent_parser.add_argument_group('Options common to all commands')
+    parent_group = parent_parser.add_argument_group('Options common to all commands (some commands may not use them)')
     parent_group.add_argument('--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.WARNING, help="Print debugging statements (most verbose)")
     parent_group.add_argument('--verbose', action="store_const", dest="loglevel", const=logging.INFO, help="Add verbosity")
     parent_group.add_argument('--nthreads', metavar='int', type=int, help="Number of threads requested (default = maximum available)")
     parent_group.add_argument('--outdir', metavar="</path/dir/>", action="store", help="Output directory. Default: working directory")
+    parent_group.add_argument('--scratch', action="store", help="Existing scratch directory (i.e. path must exist). Default: working directory")
     parent_group.add_argument('--prefix', metavar="<no_extension>", help="optional file name --- just the prefix, since suffixes (a.k.a. extensions) are added by the program")
     parent_group.add_argument('--version', action='version', version=f"%(prog)s {__version__}") ## called with subcommands
 
@@ -135,9 +148,16 @@ def main():
     up_findp = subp.add_parser('find_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('fasta', help="unaligned sequences")
     up_findp.add_argument('-l', '--length', metavar='int', type=int, help="optimal primer size, in bp (default=20)")
-    up_findp.add_argument('-b', '--border', metavar='int', type=int, help="how far from sequence borders, in bp, we should look for primers (default=400)")
-    up_findp.add_argument('-n', '--n_primers', metavar='int', type=int, help="how many primers, per sequence, per end, should be returned (default=100)")
+    up_findp.add_argument('-b', '--border', metavar='int', type=int, default=400, help="how far from sequence borders, in bp, we should look for primers (default=400)")
+    up_findp.add_argument('-n', '--n_primers', metavar='int', type=int, default=100, help="how many primers, per sequence, per end, should be returned (default=100)")
     up_findp.set_defaults(func = run_find_primers)
+
+    this_help = "Extract and cluster flanking regions of operons where primers may be found"
+    up_findp = subp.add_parser('get_flanks', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('fasta', help="unaligned sequences")
+    up_findp.add_argument('-b', '--border', metavar='int', type=int, default=400, help="how far from sequence borders, in bp, we should look for primers (default=400)")
+    up_findp.add_argument('-i', '--id', type=float, default=0.95, help="If defined, identity for vsearch (default is to use OPTICS clustering instead of vsearch")
+    up_findp.set_defaults(func = run_cluster_flanks)
 
     this_help = "Cluster primers described in csv file;\nIf several csv files are given, default output files will keep their unique names (i.e. without common prefix or suffix)"
     up_findp = subp.add_parser('cluster_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
@@ -160,6 +180,15 @@ def main():
     if args.outdir: 
         defaults["current_dir"] = args.outdir = os.path.join(defaults["current_dir"], args.outdir)
         pathlib.Path(defaults["current_dir"]).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
+
+    if args.scratch:
+        tmpdir = os.path.join(defaults["current_dir"], args.scratch)
+        if not os.path.isdir(tmpdir):
+            logger.error(f"{tmpdir} does not exist or it's not a directory")
+            sys.exit(1)
+        defaults["scratch"] = args.scratch = os.path.join(defaults["current_dir"], args.scratch, defaults["scratch"])
+    else: # in any case, scratch will be a subdirectory of existing scratch area (we can delete it with shutil.rmtree())
+        defaults["scratch"] = args.scratch = os.path.join(defaults["current_dir"], defaults["scratch"])
 
     if args.nthreads:
         if args.nthreads < 1: args.nthreads = 1
