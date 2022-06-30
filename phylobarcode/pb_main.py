@@ -63,7 +63,7 @@ def run_cluster_flanks (args):
         args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_flank")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     task_cluster.cluster_flanks_from_fasta (fastafile=args.fasta, output=args.prefix, border=args.border,
-            identity=args.id, nthreads=args.nthreads, scratch=args.scratch)
+            identity=args.id, nthreads=args.nthreads, min_samples = args.min_samples, scratch=args.scratch)
     return
 
 
@@ -79,7 +79,8 @@ def run_cluster_primers (args):
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     uniq = remove_prefix_suffix (args.csv)
     for infile, outfile in zip (args.csv, uniq):
-        task_cluster.cluster_primers_from_csv (csv=infile, output=f"{args.prefix}_{outfile}", nthreads=args.nthreads)
+        task_cluster.cluster_primers_from_csv (csv=infile, output=f"{args.prefix}_{outfile}", 
+                min_samples = args.min_samples, nthreads=args.nthreads)
     return
 
 def run_blast_primers (args):
@@ -131,12 +132,18 @@ class ParserWithErrorHelp(argparse.ArgumentParser):
 def main():
     parent_parser = ParserWithErrorHelp(description=long_description, add_help=False)
     parent_group = parent_parser.add_argument_group('Options common to all commands (some commands may not use them)')
-    parent_group.add_argument('--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.WARNING, help="Print debugging statements (most verbose)")
-    parent_group.add_argument('--verbose', action="store_const", dest="loglevel", const=logging.INFO, help="Add verbosity")
-    parent_group.add_argument('--nthreads', metavar='int', type=int, help="Number of threads requested (default = maximum available)")
-    parent_group.add_argument('--outdir', metavar="</path/dir/>", action="store", help="Output directory. Default: working directory")
-    parent_group.add_argument('--scratch', action="store", help="Existing scratch directory (i.e. path must exist). Default: working directory")
-    parent_group.add_argument('--prefix', metavar="<no_extension>", help="optional file name --- just the prefix, since suffixes (a.k.a. extensions) are added by the program")
+    parent_group.add_argument('--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.WARNING, 
+            help="Print debugging statements (most verbose)")
+    parent_group.add_argument('--verbose', action="store_const", dest="loglevel", const=logging.INFO, 
+            help="Add verbosity")
+    parent_group.add_argument('--nthreads', metavar='int', type=int, 
+            help="Number of threads requested (default = maximum available)")
+    parent_group.add_argument('--outdir', metavar="</path/dir/>", action="store", 
+            help="Output directory. Default: working directory")
+    parent_group.add_argument('--scratch', action="store", 
+            help="Existing scratch directory (i.e. path must exist). Default: working directory")
+    parent_group.add_argument('--prefix', metavar="<no_extension>", 
+            help="optional file name --- just the prefix, since suffixes (a.k.a. extensions) are added by the program")
     parent_group.add_argument('--version', action='version', version=f"%(prog)s {__version__}") ## called with subcommands
 
     # alternative to subp= parent_parser.add_subparsers(dest='command', description=None, title="Commands")
@@ -147,31 +154,45 @@ def main():
     this_help = "Find primers given an alignment file" # help is shown in "prog -h", description is shown in "prog this -h"
     up_findp = subp.add_parser('find_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('fasta', help="unaligned sequences")
-    up_findp.add_argument('-l', '--length', metavar='int', type=int, help="optimal primer size, in bp (default=20)")
-    up_findp.add_argument('-b', '--border', metavar='int', type=int, default=400, help="how far from sequence borders, in bp, we should look for primers (default=400)")
-    up_findp.add_argument('-n', '--n_primers', metavar='int', type=int, default=100, help="how many primers, per sequence, per end, should be returned (default=100)")
+    up_findp.add_argument('-l', '--length', metavar='int', type=int, 
+            help="optimal primer size, in bp (default=20)")
+    up_findp.add_argument('-b', '--border', metavar='int', type=int, default=400, 
+            help="how far from sequence borders, in bp, we should look for primers (default=400)")
+    up_findp.add_argument('-n', '--n_primers', metavar='int', type=int, default=100, 
+            help="how many primers, per sequence, per end, should be returned (default=100)")
     up_findp.set_defaults(func = run_find_primers)
 
     this_help = "Extract and cluster flanking regions of operons where primers may be found"
     up_findp = subp.add_parser('get_flanks', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('fasta', help="unaligned sequences")
-    up_findp.add_argument('-b', '--border', metavar='int', type=int, default=400, help="how far from sequence borders, in bp, we should look for primers (default=400)")
-    up_findp.add_argument('-i', '--id', type=float, default=0.95, help="If defined, identity for vsearch (default is to use OPTICS clustering instead of vsearch")
+    up_findp.add_argument('-b', '--border', metavar='int', type=int, default=400, 
+            help="how far from sequence borders, in bp, we should look for primers (default=400)")
+    up_findp.add_argument('-m', '--min_samples', type=int, default=5, 
+            help="in OPTICS, minimum number of neighbours for sequence to be a core point (default=5 ;  should be larger than 2)")
+    up_findp.add_argument('-i', '--id', type=float, default=None, 
+            help="If defined, identity threshold for vsearch (default is to use OPTICS clustering instead of vsearch; suggested value is 0.5 ~ 0.9)")
     up_findp.set_defaults(func = run_cluster_flanks)
 
     this_help = "Cluster primers described in csv file;\nIf several csv files are given, default output files will keep their unique names (i.e. without common prefix or suffix)"
     up_findp = subp.add_parser('cluster_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('csv', nargs="+", help="csv files with primers (each ouput file from 'find_primers')")
+    up_findp.add_argument('-m', '--min_samples', type=int, default=5, 
+            help="in OPTICS, minimum number of neighbours for sequence to be a core point (default=5 ; should be larger than 2)")
     up_findp.set_defaults(func = run_cluster_primers)
 
     this_help = "Blast primers against database, checking for left-right pairs;\nNeeds exactly two CSV files, with " \
     "left and right primers respect. Output files will keep their unique names (i.e. without common prefix or suffix)"
     up_findp = subp.add_parser('blast_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
-    up_findp.add_argument('csv', nargs=2, help="csv files with left and right primers, respectively (out from 'find_primers' or 'cluster_primers')")
-    up_findp.add_argument('-d', '--database', required=True, help="full path to database prefix")
-    up_findp.add_argument('-e', '--evalue', type=float, default=1., help="E-value threshold for blast (default=1, beware of low values)")
-    up_findp.add_argument('-m', '--max_target_seqs', type=int, default=100, help="max number of hist per primer (default=100)")
-    up_findp.add_argument('-a', '--accurate', action="store_true", help="use accurate blastn-short (default=regular blastn)")
+    up_findp.add_argument('csv', nargs=2, 
+            help="csv files with left and right primers, respectively (out from 'find_primers' or 'cluster_primers')")
+    up_findp.add_argument('-d', '--database', required=True, 
+            help="full path to database prefix")
+    up_findp.add_argument('-e', '--evalue', type=float, default=1., 
+            help="E-value threshold for blast (default=1, beware of low values)")
+    up_findp.add_argument('-m', '--max_target_seqs', type=int, default=100, 
+            help="max number of hist per primer (default=100)")
+    up_findp.add_argument('-a', '--accurate', action="store_true", 
+            help="use accurate blastn-short (default=regular blastn)")
     up_findp.set_defaults(func = run_blast_primers)
 
     args = main_parser.parse_args()

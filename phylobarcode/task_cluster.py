@@ -13,7 +13,7 @@ stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.INFO)
 logger.addHandler(stream_log)
 
-def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, identity = None, scratch = None, nthreads=1):
+def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, identity = None, min_samples = 2, scratch = None, nthreads=1):
     if border is None: border = 400
     if output is None:
         output = "flanking." + '%012x' % random.randrange(16**12) 
@@ -56,14 +56,17 @@ def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, id
         if scratch: # delete scratch subdirectory
             shutil.rmtree(pathlib.Path(scratch))
     else:
-        ofile_centroid = [f"{output}_representative_l.fasta.gz",f"{output}_representative_r.fasta.gz"]
+        ofile_centroid = [f"{output}_clustered_l.fasta.gz",f"{output}_clustered_r.fasta.gz"]
         seqnames = [i.id for i in fas]
         logger.info (f"Clustering and chosing representative left sequences with OPTICS")
-        find_representatives_from_sequences_optics (flank_l, names=seqnames, output=ofile_centroid[0], nthreads=nthreads)
+        find_representatives_from_sequences_optics (flank_l, names=seqnames, output=ofile_centroid[0], min_samples=min_samples, nthreads=nthreads)
         logger.info (f"Clustering and chosing representative right sequences with OPTICS")
-        find_representatives_from_sequences_optics (flank_r, names=seqnames, output=ofile_centroid[1], nthreads=nthreads)
+        find_representatives_from_sequences_optics (flank_r, names=seqnames, output=ofile_centroid[1], min_samples=min_samples, nthreads=nthreads)
     
-def cluster_primers_from_csv (csv = None, output = None, nthreads = 1):
+    logger.info (f"Finished. Reduced sequence sets saved to files {ofile_centroid[0]} and {ofile_centroid[1]};")
+    return
+    
+def cluster_primers_from_csv (csv = None, output = None, min_samples = 2, nthreads = 1):
     if csv is None: 
         logger.error("No csv file provided")
         return
@@ -77,7 +80,7 @@ def cluster_primers_from_csv (csv = None, output = None, nthreads = 1):
     logger.info(f"Read {len(primers)} primers from file {csv}; will now calculate pairwise distances")
     distmat = score_to_distance_matrix_fraction (create_NW_score_matrix(primers), mafft=True)
     with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
-        cl = cluster.OPTICS(min_samples=3, metric="precomputed", n_jobs=nthreads).fit(distmat)
+        cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
     df["cluster"] = cl.labels_
     logger.info(f"Clustering done, writing to file {output}")
     df.to_csv (f"{output}.csv", sep=",", index=False)
@@ -145,7 +148,8 @@ def find_centroids_from_file_vsearch (fastafile=None, output=None, identity=0.95
     # delete tmp file
     pathlib.Path(tmpfile).unlink()
 
-def find_representatives_from_sequences_optics (sequences=None, names=None, output=None, nthreads=0):
+# affinity propagation returns representatives, using similiarity matrix as input; birch needs features
+def find_representatives_from_sequences_optics (sequences=None, names=None, output=None, min_samples=2, nthreads=-1):
     if sequences is None:
         logger.error("No sequences provided to OPTICS")
         return
@@ -154,8 +158,26 @@ def find_representatives_from_sequences_optics (sequences=None, names=None, outp
     if output is None:
         output = "representatives." + '%012x' % random.randrange(16**12) + ".fasta.gz"
         logger.warning (f"No output file specified, writing to file {output}")
+    if (min_samples > len(sequences)//3): min_samples = len(sequences)//3
+    if (min_samples < 2): min_samples = 2
 
+    logger.info(f"Calculating pairwise distances between {len(sequences)} sequences")
     distmat = score_to_distance_matrix_fraction (create_NW_score_matrix(sequences), mafft=True)
+    logger.info(f"Calculating OPTICS")
     with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
-        cl = cluster.OPTICS(min_samples=s, metric="precomputed", n_jobs=nthreads).fit(distmat)
-    # STOPHERE df["cluster"] = cl.labels_
+        cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
+
+    idx = [i for i,j in enumerate(cl.labels_) if j < 0] # all noisy points (negative labels) are representatives
+    cl = [[i,j,k,l] for i,(j,k,l) in enumerate(zip(cl.labels_, cl.reachability_, names))] # we have [index, label, reachability, name]
+    cl = [x for x in cl if x[1] >= 0] # excluding noisy seqs; we need one per cluster, with min reachability distance
+    cl = sorted(cl, key=lambda x: (x[1], x[2])) # sort by cluster label, breaking ties with reachability
+#    print ("\n".join(["\t".join(map(str,i)) for i in cl])) # DEBUG
+    cl = [list(v)[0] for k,v in itertools.groupby(cl, key=lambda x: x[1])] # groupby x[1] i.e. cluster label and return first element of each group
+    idx += [x[0] for x in cl] # add all cluster representatives to indx_1
+
+    # write representatives to file
+    with open_anyformat(output, "w") as f:
+        for i in idx:
+            f.write(str(f">{names[i]}\n{sequences[i]}\n").encode())
+    logger.info(f"Wrote {len(idx)} representatives to file {output}")
+
