@@ -17,6 +17,7 @@ dependencies:
   - xz
   - blast 
   - vsearch
+  - gffutils
     #  - python>3.7
     #  - primer3>2.6.0
     #  - pip

@@ -46,6 +46,7 @@ setuptools.setup(
            #'numpy>1.22.2',
            #'pandas>1.4.1',
            #'xxhash >= 0.8.0', # equiv to python-xxhash 2.0.0
+           'gffutils',
            'biopython',
            'parasail',
            'numpy',
