@@ -34,7 +34,15 @@ def read_fasta_as_list (filename, clean_sequence=True):
             if clean_sequence:
                 record.seq  = Seq.Seq(str(record.seq.upper()).replace(".","N"))
             unaligned.append(record)
-    logger.info("Read %s sequences from file %s", str(len(unaligned)), filename)
+    logger.debug("Read %s sequences from file %s", str(len(unaligned)), filename)
+    return unaligned
+
+def read_fasta_headers_as_list (filename):
+    unaligned = []
+    with open_anyformat (filename, "r") as handle:
+        for record in SeqIO.parse(handle, "fasta"):
+            unaligned.append(record.id)
+    logger.debug("Read %s sequence headers from file %s", str(len(unaligned)), filename)
     return unaligned
 
 def mafft_align_seqs (sequences=None, infile = None, outfile = None, reference_file = None, prefix = "/tmp/"):    # list not dict

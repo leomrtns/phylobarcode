@@ -29,12 +29,21 @@ SPDX-License-Identifier: GPL-3.0-or-later; Copyright (C) 2022-today Leonardo de 
 https://github.com/quadram-institute-bioscience/phylobarcode\n
 """
 
+def generate_prefix_for_task (args, taskname):
+    if args.prefix:
+        args.prefix = os.path.join(defaults["current_dir"], args.prefix) # "current_dir" = args.outdir, buth updated with user choice
+    else:
+        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_{taskname}")
+
+def run_merge_fasta_gff (args):
+    from phylobarcode import task_fasta_gff
+    generate_prefix_for_task (args, "fastagff")
+    if not args.nthreads: args.nthreads = defaults["nthreads"]
+    task_fasta_gff.merge_fasta_gff (fastadir=args.fasta, gffdir=args.gff, scratch=args.scratch, output=args.prefix)
+
 def run_find_primers (args):
     from phylobarcode import task_find_primers
-    if args.prefix:
-        args.prefix = os.path.join(defaults["current_dir"], args.prefix)
-    else:
-        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_primers")
+    generate_prefix_for_task (args, "primers")
     if args.nthreads and args.nthreads < 2:
         logger.info("Single-threaded mode requested by user")
         task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
@@ -57,10 +66,7 @@ def run_find_primers (args):
 
 def run_cluster_flanks (args):
     from phylobarcode import task_cluster
-    if args.prefix:
-        args.prefix = os.path.join(defaults["current_dir"], args.prefix)
-    else:
-        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_flank")
+    generate_prefix_for_task (args, "flank")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     task_cluster.cluster_flanks_from_fasta (fastafile=args.fasta, output=args.prefix, border=args.border,
             identity=args.id, nthreads=args.nthreads, min_samples = args.min_samples, scratch=args.scratch)
@@ -69,10 +75,7 @@ def run_cluster_flanks (args):
 
 def run_cluster_primers (args):
     from phylobarcode import task_cluster
-    if args.prefix:
-        args.prefix = os.path.join(defaults["current_dir"], args.prefix)
-    else:
-        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_cluster")
+    generate_prefix_for_task (args, "cluster")
     if len(args.csv) < 2: ## "nargs='+'" always returns a list of at least one element (or None, but here it's positional)
         task_cluster.cluster_primers_from_csv (csv=args.csv[0], output=args.prefix, nthreads=args.nthreads)
         return
@@ -85,10 +88,7 @@ def run_cluster_primers (args):
 
 def run_blast_primers (args):
     from phylobarcode import task_blast_primers
-    if args.prefix:
-        args.prefix = os.path.join(defaults["current_dir"], args.prefix)
-    else:
-        args.prefix = os.path.join(defaults["current_dir"], f"pb.{defaults['timestamp']}_blast")
+    generate_prefix_for_task (args, "blast")
     if len(args.csv) != 2:
         logger.error("Exactly two CSV files must be provided (left and right, in order)")
         return
@@ -151,6 +151,13 @@ def main():
     main_parser.add_argument('--version', action='version', version=f"%(prog)s {__version__}") ## called without  subcommands (grouped together with --help)
     subp= main_parser.add_subparsers(dest='Commands', description=None, title="Commands", required=True)
 
+    # TODO: deduplicate (using genus+sourmash) and add GTDB info
+    this_help = "Given one folder with fasta files and one with GFF files of reference genomes database, creates a table with matches"
+    up_findp = subp.add_parser('merge_fasta_gff', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('-a', '--fasta', required=True, help="directory where fasta genomic files can be found") # technically not needed if gff3 contains fasta
+    up_findp.add_argument('-g', '--gff', required=True, help="directory with GFF3 files")
+    up_findp.set_defaults(func = run_merge_fasta_gff)
+
     this_help = "Find primers given an alignment file" # help is shown in "prog -h", description is shown in "prog this -h"
     up_findp = subp.add_parser('find_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('fasta', help="unaligned sequences")
@@ -200,7 +207,9 @@ def main():
 
     if args.outdir: 
         defaults["current_dir"] = args.outdir = os.path.join(defaults["current_dir"], args.outdir)
-        pathlib.Path(defaults["current_dir"]).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
+    else:
+        args.outdir = defaults["current_dir"]
+    pathlib.Path(defaults["current_dir"]).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
 
     if args.scratch:
         tmpdir = os.path.join(defaults["current_dir"], args.scratch)
