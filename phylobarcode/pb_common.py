@@ -3,13 +3,9 @@ from Bio import Seq, SeqIO
 import random, datetime, sys, re, glob, collections, subprocess, itertools, pathlib, base64, string
 import lzma, gzip, bz2
 
-logger = logging.getLogger(__name__) 
-logger.propagate = False
-stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode_common %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
-stream_log.setFormatter(log_format)
-stream_log.setLevel(logging.INFO)
-logger.addHandler(stream_log)
+# legacy code, now every module shares the same parent logger
+#log_format = logging.Formatter(fmt='phylobarcode_common %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
+logger = logging.getLogger("phylobarcode_global_logger")
 
 base62 = string.digits + string.ascii_letters + '_.-+~@'  # 66 elements actually (62 is alphanum only)
 len_base62 = len (base62)
@@ -38,12 +34,12 @@ def read_fasta_as_list (filename, clean_sequence=True):
     return unaligned
 
 def read_fasta_headers_as_list (filename):
-    unaligned = []
+    seqnames = []
     with open_anyformat (filename, "r") as handle:
         for record in SeqIO.parse(handle, "fasta"):
-            unaligned.append(record.id)
-    logger.debug("Read %s sequence headers from file %s", str(len(unaligned)), filename)
-    return unaligned
+            seqnames.append(record.id)
+    logger.debug("Read %s sequence headers from file %s", str(len(seqnames)), filename)
+    return seqnames
 
 def mafft_align_seqs (sequences=None, infile = None, outfile = None, reference_file = None, prefix = "/tmp/"):    # list not dict
     if (sequences is None) and (infile is None):

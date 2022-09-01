@@ -1,19 +1,22 @@
 import os, logging, argparse, sys, pathlib, multiprocessing, datetime, itertools, pathlib, random
 from phylobarcode.__version__ import __version__
 
-logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
-logger.propagate = False
 stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode___main %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
+#log_format = logging.Formatter(fmt='phylobarcode___main %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d%H:%M") # now it's shared 
+log_format = logging.Formatter(fmt='phylobarcode %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 stream_log.setFormatter(log_format)
 stream_log.setLevel(logging.DEBUG)
+
+#logger = logging.getLogger(__name__) # this creates one logger per module, but I want one logger for the whole program
+logger = logging.getLogger("phylobarcode_global_logger") # creates a named global logger
 logger.addHandler(stream_log)
+logger.propagate = False
 
 defaults = {
     "current_dir": os.getcwd() + "/",
     "timestamp": datetime.datetime.now().strftime("%y%m%d_%H%M%S"),
     "nthreads": multiprocessing.cpu_count(),
-    "scratch": '%012x' % random.randrange(16**12),
+    "scratch": 'phylobar.%016x' % random.randrange(16**16),
 #   "reference": os.path.join( os.path.dirname(os.path.abspath(__file__)), "data/MN908947.3.fas") 
     }
 
@@ -71,7 +74,6 @@ def run_cluster_flanks (args):
     task_cluster.cluster_flanks_from_fasta (fastafile=args.fasta, output=args.prefix, border=args.border,
             identity=args.id, nthreads=args.nthreads, min_samples = args.min_samples, scratch=args.scratch)
     return
-
 
 def run_cluster_primers (args):
     from phylobarcode import task_cluster
@@ -152,14 +154,23 @@ def main():
     subp= main_parser.add_subparsers(dest='Commands', description=None, title="Commands", required=True)
 
     # TODO: deduplicate (using genus+sourmash) and add GTDB info
-    this_help = "Given one folder with fasta files and one with GFF files of reference genomes database, creates a table with matches"
-    up_findp = subp.add_parser('merge_fasta_gff', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
-    up_findp.add_argument('-a', '--fasta', required=True, help="directory where fasta genomic files can be found") # technically not needed if gff3 contains fasta
-    up_findp.add_argument('-g', '--gff', required=True, help="directory with GFF3 files")
+    this_help = "Given one folder with fasta files and one with GFF files of reference genomes, creates a table with matches. "
+    extra_help= '''\n
+    The fasta and GFF files are recognised by their extensions (fasta, fna, faa, gff, gff3) with optional compression.
+    '''
+    up_findp = subp.add_parser('merge_fasta_gff', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('-a', '--fasta', metavar="<dir>", required=True, 
+            help="directory where fasta genomic files can be found (required)") # technically not needed if gff3 contains fasta
+    up_findp.add_argument('-g', '--gff',   metavar="<dir>", required=True, help="directory with GFF3 files (required)")
     up_findp.set_defaults(func = run_merge_fasta_gff)
 
-    this_help = "Find primers given an alignment file" # help is shown in "prog -h", description is shown in "prog this -h"
-    up_findp = subp.add_parser('find_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    this_help = "Find primers given a fasta file." # help is shown in "prog -h", description is shown in "prog this -h"
+    extra_help= '''\n
+    Runs `primer3_core` on each sequence in the alignment file, generating two tables, of left (l) and right (r) primers. Can use multiple threads.
+    '''
+    up_findp = subp.add_parser('find_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('fasta', help="unaligned sequences")
     up_findp.add_argument('-l', '--length', metavar='int', type=int, 
             help="optimal primer size, in bp (default=20)")
@@ -169,8 +180,14 @@ def main():
             help="how many primers, per sequence, per end, should be returned (default=100)")
     up_findp.set_defaults(func = run_find_primers)
 
-    this_help = "Extract and cluster flanking regions of operons where primers may be found"
-    up_findp = subp.add_parser('get_flanks', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    this_help = "Extract and cluster flanking regions of operons where primers may be found."
+    extra_help= '''\n
+    The left and right flanking regions are short sequences (default=400 bp) which are extracted from the beginning (l)
+    or end (r) of each sequence, and clustered using vsearch or OPTICS. Both original and clustered sequences are returned.
+    OPTICS is used by default, but if you set an identity threshold (option `-i` or `--id`), vsearch is used instead.
+    '''
+    up_findp = subp.add_parser('get_flanks', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('fasta', help="unaligned sequences")
     up_findp.add_argument('-b', '--border', metavar='int', type=int, default=400, 
             help="how far from sequence borders, in bp, we should look for primers (default=400)")
@@ -180,16 +197,28 @@ def main():
             help="If defined, identity threshold for vsearch (default is to use OPTICS clustering instead of vsearch; suggested value is 0.5 ~ 0.9)")
     up_findp.set_defaults(func = run_cluster_flanks)
 
-    this_help = "Cluster primers described in csv file;\nIf several csv files are given, default output files will keep their unique names (i.e. without common prefix or suffix)"
-    up_findp = subp.add_parser('cluster_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    this_help = "Cluster primers described in csv file, adding a column to table with cluster number."
+    extra_help= '''\n
+    If several csv files are given, default output files will keep their unique names (i.e. without common prefix or
+    suffix). The OPTICS algorithm is used to cluster primers.
+    The input CSV files should be the output of `find_primers`.
+    '''
+    up_findp = subp.add_parser('cluster_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('csv', nargs="+", help="csv files with primers (each ouput file from 'find_primers')")
     up_findp.add_argument('-m', '--min_samples', type=int, default=5, 
             help="in OPTICS, minimum number of neighbours for sequence to be a core point (default=5 ; should be larger than 2)")
     up_findp.set_defaults(func = run_cluster_primers)
 
-    this_help = "Blast primers against database, checking for left-right pairs;\nNeeds exactly two CSV files, with " \
-    "left and right primers respect. Output files will keep their unique names (i.e. without common prefix or suffix)"
-    up_findp = subp.add_parser('blast_primers', help=this_help, description=this_help, parents=[parent_parser], formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    this_help = "Blast primers against database, checking for left-right pairs."
+    extra_help= '''\n
+    Needs exactly two CSV files, with left and right primers respectively. These CSV files should be the output of
+    `find_primers` or `cluster_primers`. 
+    Output files will keep their unique names (i.e. without common prefix or suffix)
+    Can use multiple threads within each BLAST job, or to create several concurrent BLAST jobs.
+    '''
+    up_findp = subp.add_parser('blast_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('csv', nargs=2, 
             help="csv files with left and right primers, respectively (out from 'find_primers' or 'cluster_primers')")
     up_findp.add_argument('-d', '--database', required=True, 
@@ -214,10 +243,10 @@ def main():
     if args.scratch:
         tmpdir = os.path.join(defaults["current_dir"], args.scratch)
         if not os.path.isdir(tmpdir):
-            logger.error(f"{tmpdir} does not exist or it's not a directory")
+            logger.error(f"Scratch directory {tmpdir} does not exist or it's not a directory")
             sys.exit(1)
         defaults["scratch"] = args.scratch = os.path.join(defaults["current_dir"], args.scratch, defaults["scratch"])
-    else: # in any case, scratch will be a subdirectory of existing scratch area (we can delete it with shutil.rmtree())
+    else: # in any case, scratch will be a subdirectory of existing scratch area (which we can delete it with shutil.rmtree())
         defaults["scratch"] = args.scratch = os.path.join(defaults["current_dir"], defaults["scratch"])
 
     if args.nthreads:

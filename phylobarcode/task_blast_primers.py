@@ -6,14 +6,9 @@ from Bio.Blast import NCBIXML
 from Bio import Seq, SeqIO
 from Bio.SeqRecord import SeqRecord
 
-
-logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
-logger.propagate = False
-stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode__blast %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
-stream_log.setFormatter(log_format)
-stream_log.setLevel(logging.INFO)
-logger.addHandler(stream_log)
+# legacy code (no need to create a distinct stream)
+#log_format = logging.Formatter(fmt='phylobarcode__blast %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
+logger = logging.getLogger("phylobarcode_global_logger")
 
 database_fallback = "/media/teradisk/03.n114312_bigdata/blast/ref_prok_rep_genomes"
 
@@ -44,28 +39,34 @@ def blast_primers_from_csv (csv=None, output=None, database = None, evalue=1, ta
     primers_r = df_r["primer"].tolist()
     logger.info(f"Read {len(primers_l)} primers from file {csv[0]} and {len(primers_r)} from file {csv[1]}; Running blast now")
 
-    if nthreads < 2:
+    if nthreads < 2: # single BLAST job, still this one job will use all available CPUs
         ncpus = multiprocessing.cpu_count()
         if ncpus < 1: ncpus = 1
         logger.info(f"Using single thread with {ncpus} CPUs per blast job")
+        logger.info(f"Running blast on left primers from file {csv[0]}")
         blast_l = query_primers_blastn_on_database (primers_l, database=database, evalue=evalue, task=task,
-            max_target_seqs=max_target_seqs, nthreads=ncpus)
+            max_target_seqs=max_target_seqs, ncpus=ncpus)
+        logger.info(f"Running blast on right primers from file {csv[1]}")
         blast_r = query_primers_blastn_on_database (primers_r, database=database, evalue=evalue, task=task,
-            max_target_seqs=max_target_seqs, nthreads=ncpus)
-    else:
+            max_target_seqs=max_target_seqs, ncpus=ncpus)
+    else: # user wants several BLAST jobs
         try:
             from multiprocessing import Pool
             from functools import partial
         except ImportError:
             ncpus = multiprocessing.cpu_count()
             logger.error(f"Multiprocessing not available for python, will run one blast process with {ncpus} CPUs")
+            logger.info(f"Running blast on left primers from file {csv[0]}")
             blast_l = query_primers_blastn_on_database (primers_l, database=database, evalue=evalue, task=task,
-                    max_target_seqs=max_target_seqs, nthreads=ncpus)
+                    max_target_seqs=max_target_seqs, ncpus=ncpus)
+            logger.info(f"Running blast on right primers from file {csv[1]}")
             blast_r = query_primers_blastn_on_database (primers_r, database=database, evalue=evalue, task=task,
-                    max_target_seqs=max_target_seqs, nthreads=ncpus)
+                    max_target_seqs=max_target_seqs, ncpus=ncpus)
         else:
+            logger.info(f"Running blast on left primers from file {csv[0]}")
             blast_l = query_primers_blastn_on_database_parallel (primers_l, database=database, evalue=evalue, task=task,
                     max_target_seqs=max_target_seqs, nthreads=nthreads)
+            logger.info(f"Running blast on right primers from file {csv[1]}")
             blast_r = query_primers_blastn_on_database_parallel (primers_r, database=database, evalue=evalue, task=task,
                     max_target_seqs=max_target_seqs, nthreads=nthreads)
 
@@ -85,12 +86,14 @@ def query_primers_blastn_on_database_parallel (primer_list, database=None, evalu
     from multiprocessing import Pool
     from functools import partial
     with Pool(nthreads) as p:
-        results = p.map(partial(query_primers_blastn_on_database, database=database, evalue=evalue, task=task, max_target_seqs=max_target_seqs, nthreads=1), primers_per_thread)
+        results = p.map(
+                partial(query_primers_blastn_on_database, database=database, evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus), 
+                primers_per_thread)
     results = [i for i in results if i is not None]
     if len(results): return pd.concat(results)
     else:            return None
 
-def query_primers_blastn_on_database (primer_list, database=None, evalue = 1, task="blastn-short", max_target_seqs=1000, nthreads=1):
+def query_primers_blastn_on_database (primer_list, database=None, evalue = 1, task="blastn-short", max_target_seqs=1000, ncpus=1):
     """ 
     task = "blastn-short" (more precise) or task = "blastn" 
     nthreads = number of threads for blast query
@@ -100,7 +103,7 @@ def query_primers_blastn_on_database (primer_list, database=None, evalue = 1, ta
         logger.error(f"I need a database (full path with prefix of DB in blast format; usually filename without '.nal' \
                 or '.nsq'); I will try to use {database} but there are no guarantees it will work")
     cline = f"blastn -query - -db {database} -evalue {evalue} -task \"{task}\" -word_size 7 -out - \
-              -outfmt \"6 std qseq sseq\"  -max_target_seqs {max_target_seqs} -num_threads {nthreads}" ## format 6 plus aligned querey plus aligned subject
+              -outfmt \"6 std qseq sseq\"  -max_target_seqs {max_target_seqs} -num_threads {ncpus}" ## format 6 plus aligned querey plus aligned subject
     child = subprocess.Popen(cline, stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
                             universal_newlines=True, shell=(sys.platform!="win32"))
     records = [SeqRecord(Seq.Seq(seq), id=seq) for seq in primer_list] ## head is primer itself (like "> ACGTGT") 

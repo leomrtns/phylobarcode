@@ -5,13 +5,9 @@ import itertools, pathlib, shutil, gzip
 from Bio import pairwise2
 from sklearn import cluster
 
-logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
-logger.propagate = False
-stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode_clustr %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
-stream_log.setFormatter(log_format)
-stream_log.setLevel(logging.INFO)
-logger.addHandler(stream_log)
+# legacy code, no need to create a distinct stream
+# log_format = logging.Formatter(fmt='phylobarcode_clustr %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
+logger = logging.getLogger("phylobarcode_global_logger")
 
 def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, identity = None, min_samples = 2, scratch = None, nthreads=1):
     if border is None: border = 400
@@ -82,7 +78,7 @@ def cluster_primers_from_csv (csv = None, output = None, min_samples = 2, nthrea
     with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
         cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
     df["cluster"] = cl.labels_
-    logger.info(f"Clustering done, writing to file {output}")
+    logger.info(f"Clustering done, writing to file {output}.csv")
     df.to_csv (f"{output}.csv", sep=",", index=False)
 
 def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seqs don't need to be aligned, must be strings

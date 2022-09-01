@@ -2,13 +2,9 @@
 from phylobarcode.pb_common import *  ## better to have it in json?
 import re, numpy as np
 
-logger = logging.getLogger(__name__) # https://github.com/MDU-PHL/arbow
-logger.propagate = False
-stream_log = logging.StreamHandler()
-log_format = logging.Formatter(fmt='phylobarcode_primer %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
-stream_log.setFormatter(log_format)
-stream_log.setLevel(logging.INFO)
-logger.addHandler(stream_log)
+# legacy code, no need to create a separate logger
+#log_format = logging.Formatter(fmt='phylobarcode_primer %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
+logger = logging.getLogger("phylobarcode_global_logger")
 
 def find_primers (fastafile = None, primer_opt_size = 20, border = 400, num_return = 100, output = None):
     if primer_opt_size is None: primer_opt_size = 20
