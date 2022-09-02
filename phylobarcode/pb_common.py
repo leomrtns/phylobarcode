@@ -37,7 +37,7 @@ def read_fasta_headers_as_list (filename):
     seqnames = []
     with open_anyformat (filename, "r") as handle:
         for record in SeqIO.parse(handle, "fasta"):
-            seqnames.append(record.id)
+            seqnames.append(record.description)
     logger.debug("Read %s sequence headers from file %s", str(len(seqnames)), filename)
     return seqnames
 

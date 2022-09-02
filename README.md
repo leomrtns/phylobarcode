@@ -41,7 +41,8 @@ python setup.py install # or "pip install ."
 Since this software is still under development, these two commands are quite useful:
 ```bash
 conda env update -f environment.yml # update conda evironment after changing dependencies
-pip install -e . # installs in development mode (modifications to python files are live)
+# installs in development mode (modifications to python files are live):
+pip install -e .  # or python setup.py develop
 ```
 
 ## License 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json?
 import pandas as pd, numpy as np
-import itertools, io, multiprocessing, shutil
+import itertools, io, multiprocessing, shutil, gffutils
 from Bio.Blast import NCBIXML
 from Bio import Seq, SeqIO
 from Bio.SeqRecord import SeqRecord
@@ -32,19 +32,59 @@ def merge_fasta_gff (fastadir=None, gffdir=None, scratch=None, output=None):
     if scratch is None: ## this should not happen if function called from main script; use current directory 
         scratch = f"scratch.{hash_name}"
     # create scratch directory (usually it's a subdirectory of the user-given scratch directory)
-#    pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
-    fasta_files = \
-            glob.glob(f"{fastadir}/*.fasta") + glob.glob(f"{fastadir}/*.fasta.*") + \
-            glob.glob(f"{fastadir}/*.fa")    + glob.glob(f"{fastadir}/*.fa.*") + \
-            glob.glob(f"{fastadir}/*.fna")   + glob.glob(f"{fastadir}/*.fna.*") + \
-            glob.glob(f"{fastadir}/*.fas")   + glob.glob(f"{fastadir}/*.fas.*")
+    pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
+
+
+    # check if directories contain fasta and gff files first, before doing anything else
+    fasta_files = list_of_files_by_extension (fastadir, ['fasta', 'fa', 'fna', 'faa', 'ffn', 'faa', 'fas'])
     print (f"Found {len(fasta_files)} fasta files in {fastadir}")
-    #read_fasta_headers_as_list (filename);
+    gff_files = list_of_files_by_extension (gffdir, ['gff', 'gff3'])
+    print (f"Found {len(gff_files)} gff files in {gffdir}")
+    if (len(fasta_files) == 0):
+        logger.error(f"No fasta files found in {fastadir}")
+        return
+    if (len(gff_files) == 0):
+        logger.error(f"No gff files found in {gffdir}")
+        return
+
+    # get list of sequence names
+    seqnames = []
+    for fasfile in fasta_files[:100]:
+        seqnames.extend (read_fasta_headers_as_list (fasfile)) # read_fasta is defined in pb_common.py
+    for i in seqnames[:10]:
+        print (i)
+
+    # get list of GFF genomes (chromosomes and plasmids), using scratch dir to store the sqlite db
+    gff_genomes = []
+    dbfile = f"{scratch}/gff.db"
+    for gffile in gff_files[:100]:
+        gff_genomes.extend (list_of_region_elements_in_gff (gffile, dbfile))
+    for i in gff_genomes[:10]:
+        print (i)
 
     # delete scratch subdirectory and all its contents
-#    shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
+    shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
 
 
+def list_of_files_by_extension (dirname, extension):
+    files = []
+    for ext in extension:
+        files += glob.glob(f"{dirname}/*.{ext}") + glob.glob(f"{dirname}/*.{ext}.*")
+    return files
 
-        
+def list_of_region_elements_in_gff (gff_file, database_file):
+    db = gffutils.create_db (gff_file, database_file, merge_strategy='create_unique', keep_order=True, force=True) # force to overwrite existing db
+    featlist = []
+    for ft in db.features_of_type('region', order_by='start'):
+        longname = ""
+        if ("old-name" in ft.attributes): 
+            longname = ft.attributes["old-name"] ## alternative to ft["old-name"]
+        if ("type-material" in ft.attributes): 
+            longname = ft.attributes["type-material"]
+        if ("strain" in ft.attributes):
+            longname = ft.attributes["strain"]
+        featlist.append ((os.path.basename(gff_file), ft.seqid, longname, ft["Dbxref"], ft["genome"]))
+    return featlist
+
+
 

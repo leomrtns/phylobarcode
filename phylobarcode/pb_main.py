@@ -23,9 +23,9 @@ defaults = {
 long_description = """
 Phylobarcode is a tool to search and analyse long operons with phylogenetic signal.
 
-It can search for potential long segments ('operons' or 'barcodes') which can serve as phylogenetic markers. 
-It can then search for potential primers which can be used to amplify the operon.
-And it can be used to reconstruct the evolutionary history of the amplicons.
+It can search for potential long segments ('operons' or 'barcodes') which can potentially serve as phylogenetic markers. 
+It can then search for potential primers for these markers, which can be used in the lab to amplify the operon.
+And it can be used to reconstruct the evolutionary history of the amplicons (not implemented yet).
 """
 epilogue = """
 SPDX-License-Identifier: GPL-3.0-or-later; Copyright (C) 2022-today Leonardo de Oliveira Martins
