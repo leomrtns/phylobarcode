@@ -34,12 +34,11 @@ def merge_fasta_gff (fastadir=None, gffdir=None, scratch=None, output=None):
     # create scratch directory (usually it's a subdirectory of the user-given scratch directory)
     pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
 
-
     # check if directories contain fasta and gff files first, before doing anything else
     fasta_files = list_of_files_by_extension (fastadir, ['fasta', 'fa', 'fna', 'faa', 'ffn', 'faa', 'fas'])
-    print (f"Found {len(fasta_files)} fasta files in {fastadir}")
+    logger.info(f"Found {len(fasta_files)} fasta files in {fastadir}")
     gff_files = list_of_files_by_extension (gffdir, ['gff', 'gff3'])
-    print (f"Found {len(gff_files)} gff files in {gffdir}")
+    logger.info(f"Found {len(gff_files)} gff files in {gffdir}")
     if (len(fasta_files) == 0):
         logger.error(f"No fasta files found in {fastadir}")
         return
@@ -47,20 +46,24 @@ def merge_fasta_gff (fastadir=None, gffdir=None, scratch=None, output=None):
         logger.error(f"No gff files found in {gffdir}")
         return
 
-    # get list of sequence names
-    seqnames = []
-    for fasfile in fasta_files[:100]:
-        seqnames.extend (read_fasta_headers_as_list (fasfile)) # read_fasta is defined in pb_common.py
-    for i in seqnames[:10]:
-        print (i)
-
-    # get list of GFF genomes (chromosomes and plasmids), using scratch dir to store the sqlite db
-    gff_genomes = []
+    # get sequence names as dataframe
+    df_fasta = pd.DataFrame()
+    for fasfile in fasta_files[::100]:
+        a = split_headers_in_fasta(fasfile)
+        df_fasta = pd.concat ([df_fasta, a]) if not df_fasta.empty else a
+    logger.info(f"Found {len(df_fasta)} sequences in {len(fasta_files)} fasta files")
+    # get GFF chromosomes (excludes plasmids), using scratch dir to store the sqlite db, as dataframe
     dbfile = f"{scratch}/gff.db"
-    for gffile in gff_files[:100]:
-        gff_genomes.extend (list_of_region_elements_in_gff (gffile, dbfile))
-    for i in gff_genomes[:10]:
-        print (i)
+    df_gff = pd.DataFrame()
+    for gffile in gff_files[::100]:
+        a = split_region_elements_in_gff (gffile, dbfile)
+        df_gff = pd.concat ([df_gff, a]) if not df_gff.empty else a
+    logger.info(f"Found {len(df_gff)} chromosomes in {len(gff_files)} gff files; now finding the intersection between fasta and gff files")
+
+    # merge dataframes using seqid as key, keeping only rows found in both
+    df = pd.merge(df_fasta, df_gff, on='seqid', how='inner')
+    print (df.shape)
+    print (df.head())
 
     # delete scratch subdirectory and all its contents
     shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
@@ -72,19 +75,32 @@ def list_of_files_by_extension (dirname, extension):
         files += glob.glob(f"{dirname}/*.{ext}") + glob.glob(f"{dirname}/*.{ext}.*")
     return files
 
-def list_of_region_elements_in_gff (gff_file, database_file):
+def split_headers_in_fasta (fasta_file):
+    a = [x.split(",")[0] for x in read_fasta_headers_as_list (fasta_file)] # read_fasta_headers is defined in
+    a = [[os.path.basename(fasta_file)] + x.split(" ",1) for x in a] # filename +  split on first space
+    if (len(a) == 0): 
+        return pd.DataFrame()
+    else:
+        a = list(map(list, zip(*a))) # transpose list of lists (https://stackoverflow.com/questions/6473679/python-transpose-list-of-lists)
+    a = {"fasta_file": a[0], "seqid": a[1], "fasta_description": a[2]} # dictionary of lists (one row is chromosome and others are plasmids usually
+    return pd.DataFrame.from_dict(a, orient='columns') # orient: each key is a column
+
+def split_region_elements_in_gff (gff_file, database_file):
     db = gffutils.create_db (gff_file, database_file, merge_strategy='create_unique', keep_order=True, force=True) # force to overwrite existing db
-    featlist = []
+    a = []
     for ft in db.features_of_type('region', order_by='start'):
-        longname = ""
-        if ("old-name" in ft.attributes): 
-            longname = ft.attributes["old-name"] ## alternative to ft["old-name"]
-        if ("type-material" in ft.attributes): 
-            longname = ft.attributes["type-material"]
-        if ("strain" in ft.attributes):
-            longname = ft.attributes["strain"]
-        featlist.append ((os.path.basename(gff_file), ft.seqid, longname, ft["Dbxref"], ft["genome"]))
-    return featlist
+        if ft.attributes['genome'][0] == 'chromosome': # skip plasmids
+            longname = ""
+            if ("old-name" in ft.attributes): 
+                longname = ft.attributes["old-name"][0] + ";" ## alternative to ft["old-name"]
+            if ("type-material" in ft.attributes): 
+                longname = ft.attributes["type-material"][0] + ";" 
+            if ("strain" in ft.attributes):
+                longname = ft.attributes["strain"][0] + ";"
+            a.append ([os.path.basename(gff_file), ft.seqid, longname, ft["Dbxref"][0].replace("taxon:","")]) # filename + seqid + longname + Dbxref
+    a = list(map(list, zip(*a))) # transpose list of lists (https://stackoverflow.com/questions/6473679/python-transpose-list-of-lists)
+    a = {"gff_file": a[0], "seqid": a[1], "gff_description": a[2], "gff_taxonid": a[3]} # dictionary of lists (usually one row only since chromosome)
+    return pd.DataFrame.from_dict(a, orient='columns') # orient: each key is a column
 
 
 
