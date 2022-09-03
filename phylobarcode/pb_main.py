@@ -42,7 +42,8 @@ def run_merge_fasta_gff (args):
     from phylobarcode import task_fasta_gff
     generate_prefix_for_task (args, "fastagff")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
-    task_fasta_gff.merge_fasta_gff (fastadir=args.fasta, gffdir=args.gff, scratch=args.scratch, output=args.prefix)
+    task_fasta_gff.merge_fasta_gff (fastadir=args.fasta, gffdir=args.gff, fasta_csvfile = args.csv_fasta, 
+            gff_csvfile = args.csv_gff, scratch=args.scratch, output=args.prefix)
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
@@ -157,12 +158,15 @@ def main():
     this_help = "Given one folder with fasta files and one with GFF files of reference genomes, creates a table with matches. "
     extra_help= '''\n
     The fasta and GFF files are recognised by their extensions (fasta, fna, faa, gff, gff3) with optional compression.
+    You can add a CSV file with GFF and fasta info from a previous run (e.g. to add more genomes). 
     '''
     up_findp = subp.add_parser('merge_fasta_gff', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('-a', '--fasta', metavar="<dir>", required=True, 
             help="directory where fasta genomic files can be found (required)") # technically not needed if gff3 contains fasta
     up_findp.add_argument('-g', '--gff',   metavar="<dir>", required=True, help="directory with GFF3 files (required)")
+    up_findp.add_argument('-A', '--csv_fasta', metavar="csv", help="CSV file with fasta entries from previous run (optional)")
+    up_findp.add_argument('-G', '--csv_gff',   metavar="csv", help="CSV file with GFF entries from previous run (optional)")
     up_findp.set_defaults(func = run_merge_fasta_gff)
 
     this_help = "Find primers given a fasta file." # help is shown in "prog -h", description is shown in "prog this -h"

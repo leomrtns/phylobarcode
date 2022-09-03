@@ -16,7 +16,7 @@ logger = logging.getLogger("phylobarcode_global_logger")
 #stream_log.setLevel(logging.INFO)
 #logger.addHandler(stream_log)
 
-def merge_fasta_gff (fastadir=None, gffdir=None, scratch=None, output=None):
+def merge_fasta_gff (fastadir=None, gffdir=None, fasta_csvfile = None, gff_csvfile = None, scratch=None, output=None):
     hash_name = '%012x' % random.randrange(16**12)  # use same file random file name for all files (notice that main script should have taken care of these)
     if fastadir is None: 
         logger.error("No fasta directory provided"); return
@@ -46,46 +46,89 @@ def merge_fasta_gff (fastadir=None, gffdir=None, scratch=None, output=None):
         logger.error(f"Not enough gff files found in {gffdir}")
         return
 
+    #   TODO: better to use TSV to avoid commas
     # get sequence names as dataframe
-    a = [] # list of lists (samples=rows, features=columns)
-    for fasfile in fasta_files:
-        a.extend(split_headers_in_fasta (fasfile)) # append() would create 3x list; extend() "flattens" each element like "plus"
-    a = list(map(list, zip(*a))) # transpose list of lists (https://stackoverflow.com/questions/6473679/python-transpose-list-of-lists)
-    a = {"fasta_file": a[0], "seqid": a[1], "fasta_description": a[2]} # dictionary of lists (one row is chromosome and others are plasmids usually)
-    df_fasta = pd.DataFrame.from_dict(a, orient='columns')
-    csvfilename = f"{output}_fasta.csv.gz"
-    logger.info(f"Found {len(df_fasta)} sequences in {len(fasta_files)} fasta files; writing to {csvfilename}")
-    df_fasta.to_csv (csvfilename, sep=",", index=False)
+
+    fasta_files, fasta_csv = update_csv_from_filenames (fasta_files, fasta_csvfile, "fasta_file")
+    if len(fasta_files):
+        a = [] # list of lists (samples=rows, features=columns)
+        for fasfile in fasta_files:
+            a.extend(split_headers_in_fasta (fasfile)) # append() would create 3x list; extend() "flattens" each element like "plus"
+        a = list(map(list, zip(*a))) # transpose list of lists (https://stackoverflow.com/questions/6473679/python-transpose-list-of-lists)
+        a = {"fasta_file": a[0], "seqid": a[1], "fasta_description": a[2]} # dictionary of lists (one row is chromosome and others are plasmids usually)
+        df_fasta = pd.DataFrame.from_dict(a, orient='columns')
+        if fasta_csv is not None:
+            logger.info(f"FASTA: {len(fasta_csv)} sequences already in CSV file {fasta_csvfile}")
+            logger.info(f"FASTA: {len(df_fasta)} new sequences found in directory {fastadir}")
+            df_fasta = pd.concat([df_fasta, fasta_csv], ignore_index=True)
+        else:
+            logger.info(f"FASTA: found {len(df_fasta)} sequences in directory {fastadir}")
+        csvfilename = f"{output}_fasta.csv.gz"
+        df_fasta.to_csv (csvfilename, sep=",", index=False)
+        logger.info(f"All fasta entries wrote to {csvfilename}")
+    else:
+        logger.info (f"All fasta files already found in csv file {fasta_csvfile}, with {len(fasta_csv)} entries")
+        df_fasta = fasta_csv
 
     # get GFF chromosomes (excludes plasmids), using scratch dir to store the sqlite db, as dataframe
-    dbfile = f"{scratch}/gff.db"
-    a = []
-    for gffile in gff_files[::500]:
-        #dbfile = f"{scratch}/{pathlib.Path(gffile).stem}.db" # Path = os.path.basename but "stem" removes extension
-        a.extend(split_region_elements_in_gff (gffile, dbfile))
-    a = list(map(list, zip(*a))) # transpose list of lists so that each row is one feature
-    a = {"gff_file": a[0], "seqid": a[1], "gff_description": a[2], "gff_taxonid": a[3]} # dictionary of lists (usually one row only since chromosome)
-    df_gff = pd.DataFrame.from_dict(a, orient='columns')
-    csvfilename = f"{output}_gff.csv.gz"
-    logger.info(f"Found {len(df_gff)} chromosomes in {len(gff_files)} gff files; writing to {csvfilename}")
-    df_gff.to_csv (csvfilename, sep=",", index=False)
+
+    gff_files, gff_csv = update_csv_from_filenames (gff_files, gff_csvfile, "gff_file")
+    if len(gff_files):
+        dbfile = f"{scratch}/gff.db"
+        a = []
+        for gffile in gff_files[::100]:
+            #dbfile = f"{scratch}/{pathlib.Path(gffile).stem}.db" # Path = os.path.basename but "stem" removes extension
+            a.extend(split_region_elements_in_gff (gffile, dbfile))
+        a = list(map(list, zip(*a))) # transpose list of lists so that each row is one feature
+        a = {"gff_file": a[0], "seqid": a[1], "gff_description": a[2], "gff_taxonid": a[3]} # dictionary of lists (usually one row only since chromosome)
+        df_gff = pd.DataFrame.from_dict(a, orient='columns')
+        if gff_csv is not None:
+            logger.info(f"GFF: {len(gff_csv)} sequences already in CSV file {gff_csvfile}")
+            logger.info(f"GFF: {len(df_gff)} new sequences found in directory {gffdir}")
+            df_gff = pd.concat([df_gff, gff_csv], ignore_index=True)
+        else:
+            logger.info(f"GFF: found {len(df_gff)} sequences in directory {gffdir}")
+        csvfilename = f"{output}_gff.csv.gz"
+        df_gff.to_csv (csvfilename, sep=",", index=False)
+        logger.info(f"All GFF entries wrote to {csvfilename}")
+    else:
+        logger.info (f"All GFF files already found in csv file {gff_csvfile}, with {len(gff_csv)} entries")
+        df_gff = gff_csv
 
     # merge dataframes using seqid as key, keeping only rows found in both
+
     df = pd.merge(df_fasta, df_gff, on='seqid', how='inner')
-    csvfilename = f"{output}_merged.csv.gz"
-    logger.info(f"Found {len(df)} matching genomes (i.e. both fasta and gff files); writing to {csvfilename}")
-    print (df.head())
-    df.to_csv (csvfilename, sep=",", index=False)
+    if (len(df) < 1):
+        logger.error(f"No common entries found in fasta and gff files")
+    else:
+        csvfilename = f"{output}_merged.csv.gz"
+        logger.info(f"Found {len(df)} matching genomes (i.e. both fasta and gff files); writing to {csvfilename}")
+        print (df.head())
+        df.to_csv (csvfilename, sep=",", index=False)
 
     # delete scratch subdirectory and all its contents
     shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
-
 
 def list_of_files_by_extension (dirname, extension):
     files = []
     for ext in extension:
         files += glob.glob(f"{dirname}/*.{ext}") + glob.glob(f"{dirname}/*.{ext}.*")
     return files
+
+def update_csv_from_filenames (files, csvfile, columnname):
+    if csvfile is None:
+        return files, None
+    if not os.path.isfile (csvfile):
+        logger.error(f"CSV file {csvfile} does not exist or is not a proper file"); return files, None
+    df = pd.read_csv (csvfile, sep=",", dtype=str)
+    if columnname not in df.columns:
+        logger.error(f"CSV file {csvfile} does not have column {columnname}"); return files, None
+    new_files = [f for f in files if os.path.basename(f) not in df[columnname].unique()] 
+    old_files = [os.path.basename(f) for f in list(set(files) - set(new_files))]
+    df = df[df[columnname].isin(old_files)] # keep only rows with filenames found in files
+    return new_files, df
+
+
 
 def split_headers_in_fasta (fasta_file):
     a = [x.split(",")[0] for x in read_fasta_headers_as_list (fasta_file)] # read_fasta_headers is defined in
