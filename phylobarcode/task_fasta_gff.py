@@ -84,7 +84,7 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
     if len(gff_files):
         dbfile = f"{scratch}/gff.db"
         a = []
-        for gffile in gff_files[::10]:
+        for gffile in gff_files[::4]:
             #dbfile = f"{scratch}/{pathlib.Path(gffile).stem}.db" # Path = os.path.basename but "stem" removes extension
             a.extend(split_region_elements_in_gff (gffile, dbfile))
         a = list(map(list, zip(*a))) # transpose list of lists so that each row is one feature
