@@ -12,19 +12,19 @@ logger = logging.getLogger("phylobarcode_global_logger")
 
 database_fallback = "/media/teradisk/03.n114312_bigdata/blast/ref_prok_rep_genomes"
 
-def blast_primers_from_csv (csv=None, output=None, database = None, evalue=1, task="blastn", max_target_seqs = 1000, nthreads=1):
-    if csv is None: 
-        logger.error("No csv file provided")
+def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, task="blastn", max_target_seqs = 1000, nthreads=1):
+    if tsv is None: 
+        logger.error("Not a single tsv file provided, and I need two (one for for 5'/left and one for 3'/right primers)")
         return
-    if len(csv) !=2:
-        logger.error("I need two csv files, one with left primers and one for right primers")
+    if len(tsv) !=2:
+        logger.error("I need two tsv files, one with left primers and one for right primers")
         return
     if output is None or len(output) != 2: ## this should not happen if function called from main script
         prefix = "blastprimers." + '%012x' % random.randrange(16**12) 
         output = [prefix + "_left", prefix + "_right"]
         logger.warning (f"No output file specified, using {output[0]} and {output[1]}")
     if database is None:
-        logger.error("I need a database (full path with prefix of DB in blast format; usually filename without '.nal' or '.nsq')")
+        logger.error("I need a blast database (full path with prefix of DB in blast format; usually filename without '.nal' or '.nsq')")
         return
     if evalue > 10000: evalue = 10000
     if evalue < 1e-3: evalue = 1e-3
@@ -33,20 +33,20 @@ def blast_primers_from_csv (csv=None, output=None, database = None, evalue=1, ta
     if task not in ["blastn-short", "blastn"]:
         logger.error("I need a task = 'blastn-short' or 'blastn'; I'll use 'blastn'")
 
-    df_l = pd.read_csv (csv[0], compression="infer", sep=",", dtype='unicode')
-    df_r = pd.read_csv (csv[1], compression="infer", sep=",", dtype='unicode')
+    df_l = pd.read_csv (tsv[0], compression="infer", sep="\t", dtype='unicode')
+    df_r = pd.read_csv (tsv[1], compression="infer", sep="\t", dtype='unicode')
     primers_l = df_l["primer"].tolist()
     primers_r = df_r["primer"].tolist()
-    logger.info(f"Read {len(primers_l)} primers from file {csv[0]} and {len(primers_r)} from file {csv[1]}; Running blast now")
+    logger.info(f"Read {len(primers_l)} primers from file {tsv[0]} and {len(primers_r)} from file {tsv[1]}; Running blast now")
 
     if nthreads < 2: # single BLAST job, still this one job will use all available CPUs
         ncpus = multiprocessing.cpu_count()
         if ncpus < 1: ncpus = 1
         logger.info(f"Using single thread with {ncpus} CPUs per blast job")
-        logger.info(f"Running blast on left primers from file {csv[0]}")
+        logger.info(f"Running blast on left primers from file {tsv[0]}")
         blast_l = query_primers_blastn_on_database (primers_l, database=database, evalue=evalue, task=task,
             max_target_seqs=max_target_seqs, ncpus=ncpus)
-        logger.info(f"Running blast on right primers from file {csv[1]}")
+        logger.info(f"Running blast on right primers from file {tsv[1]}")
         blast_r = query_primers_blastn_on_database (primers_r, database=database, evalue=evalue, task=task,
             max_target_seqs=max_target_seqs, ncpus=ncpus)
     else: # user wants several BLAST jobs
@@ -56,21 +56,21 @@ def blast_primers_from_csv (csv=None, output=None, database = None, evalue=1, ta
         except ImportError:
             ncpus = multiprocessing.cpu_count()
             logger.error(f"Multiprocessing not available for python, will run one blast process with {ncpus} CPUs")
-            logger.info(f"Running blast on left primers from file {csv[0]}")
+            logger.info(f"Running blast on left primers from file {tsv[0]}")
             blast_l = query_primers_blastn_on_database (primers_l, database=database, evalue=evalue, task=task,
                     max_target_seqs=max_target_seqs, ncpus=ncpus)
-            logger.info(f"Running blast on right primers from file {csv[1]}")
+            logger.info(f"Running blast on right primers from file {tsv[1]}")
             blast_r = query_primers_blastn_on_database (primers_r, database=database, evalue=evalue, task=task,
                     max_target_seqs=max_target_seqs, ncpus=ncpus)
         else:
-            logger.info(f"Running blast on left primers from file {csv[0]}")
+            logger.info(f"Running blast on left primers from file {tsv[0]}")
             blast_l = query_primers_blastn_on_database_parallel (primers_l, database=database, evalue=evalue, task=task,
                     max_target_seqs=max_target_seqs, nthreads=nthreads)
-            logger.info(f"Running blast on right primers from file {csv[1]}")
+            logger.info(f"Running blast on right primers from file {tsv[1]}")
             blast_r = query_primers_blastn_on_database_parallel (primers_r, database=database, evalue=evalue, task=task,
                     max_target_seqs=max_target_seqs, nthreads=nthreads)
 
-    print (blast_l)
+    print (blast_l) # FIXME: need to save as tsv at least; STOPHERE
 
 def query_primers_blastn_on_database_parallel (primer_list, database=None, evalue = 1, task="blastn-short", max_target_seqs=1000, nthreads=1):
     n_primers = len(primer_list)

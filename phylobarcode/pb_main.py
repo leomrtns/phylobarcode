@@ -79,23 +79,23 @@ def run_cluster_flanks (args):
 def run_cluster_primers (args):
     from phylobarcode import task_cluster
     generate_prefix_for_task (args, "cluster")
-    if len(args.csv) < 2: ## "nargs='+'" always returns a list of at least one element (or None, but here it's positional)
-        task_cluster.cluster_primers_from_csv (csv=args.csv[0], output=args.prefix, nthreads=args.nthreads)
+    if len(args.tsv) < 2: ## "nargs='+'" always returns a list of at least one element (or None, but here it's positional)
+        task_cluster.cluster_primers_from_tsv (tsv=args.tsv[0], output=args.prefix, nthreads=args.nthreads)
         return
     if not args.nthreads: args.nthreads = defaults["nthreads"]
-    uniq = remove_prefix_suffix (args.csv)
-    for infile, outfile in zip (args.csv, uniq):
-        task_cluster.cluster_primers_from_csv (csv=infile, output=f"{args.prefix}_{outfile}", 
+    uniq = remove_prefix_suffix (args.tsv)
+    for infile, outfile in zip (args.tsv, uniq):
+        task_cluster.cluster_primers_from_tsv (tsv=infile, output=f"{args.prefix}_{outfile}", 
                 min_samples = args.min_samples, nthreads=args.nthreads)
     return
 
 def run_blast_primers (args):
     from phylobarcode import task_blast_primers
     generate_prefix_for_task (args, "blast")
-    if len(args.csv) != 2:
-        logger.error("Exactly two CSV files must be provided (left and right, in order)")
+    if len(args.tsv) != 2:
+        logger.error("Exactly two tsv files must be provided (left and right, in order)")
         return
-    uniq = remove_prefix_suffix (args.csv)
+    uniq = remove_prefix_suffix (args.tsv)
     output = [f"{args.prefix}_{outfile}" for outfile in uniq]
     if args.accurate: task = "blastn-short"
     else: task = "blastn"
@@ -106,7 +106,7 @@ def run_blast_primers (args):
         logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
     else:
         logger.info(f"{args.nthreads} threads were requested by user (actual pool may be smaller)")
-    task_blast_primers.blast_primers_from_csv (csv=args.csv, output=output, database = args.database, evalue=args.evalue, 
+    task_blast_primers.blast_primers_from_tsv (tsv=args.tsv, output=output, database = args.database, evalue=args.evalue, 
             task=task, max_target_seqs = args.max_target_seqs, nthreads=args.nthreads)
     return
 
@@ -207,30 +207,30 @@ def main():
             help="If defined, identity threshold for vsearch (default is to use OPTICS clustering instead of vsearch; suggested value is 0.5 ~ 0.9)")
     up_findp.set_defaults(func = run_cluster_flanks)
 
-    this_help = "Cluster primers described in csv file, adding a column to table with cluster number."
+    this_help = "Cluster primers described in tsv file, adding a column to table with cluster number."
     extra_help= '''\n
-    If several csv files are given, default output files will keep their unique names (i.e. without common prefix or
+    If several tsv files are given, default output files will keep their unique names (i.e. without common prefix or
     suffix). The OPTICS algorithm is used to cluster primers.
-    The input CSV files here should be the output of `find_primers`.
+    The input tsv files here should be the output of `find_primers`.
     '''
     up_findp = subp.add_parser('cluster_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
-    up_findp.add_argument('csv', nargs="+", help="csv files with primers (each ouput file from 'find_primers')")
+    up_findp.add_argument('tsv', nargs="+", help="tsv files with primers (each ouput file from 'find_primers')")
     up_findp.add_argument('-m', '--min_samples', type=int, default=5, 
             help="in OPTICS, minimum number of neighbours for sequence to be a core point (default=5 ; should be larger than 2)")
     up_findp.set_defaults(func = run_cluster_primers)
 
     this_help = "Blast primers against database, checking for left-right pairs."
     extra_help= '''\n
-    Needs exactly two CSV files, with left and right primers respectively. These CSV files should be the output of
+    Needs exactly two tsv files, with left and right primers respectively. These tsv files should be the output of
     `find_primers` or `cluster_primers`. 
     Output files will keep their unique names (i.e. without common prefix or suffix)
     Can use multiple threads within each BLAST job, or to create several concurrent BLAST jobs.
     '''
     up_findp = subp.add_parser('blast_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
-    up_findp.add_argument('csv', nargs=2, 
-            help="csv files with left and right primers, respectively (out from 'find_primers' or 'cluster_primers')")
+    up_findp.add_argument('tsv', nargs=2, 
+            help="tsv files with left and right primers, respectively (out from 'find_primers' or 'cluster_primers')")
     up_findp.add_argument('-d', '--database', required=True, 
             help="full path to database prefix")
     up_findp.add_argument('-e', '--evalue', type=float, default=1., 

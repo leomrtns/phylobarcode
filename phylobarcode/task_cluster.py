@@ -62,24 +62,24 @@ def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, id
     logger.info (f"Finished. Reduced sequence sets saved to files {ofile_centroid[0]} and {ofile_centroid[1]};")
     return
     
-def cluster_primers_from_csv (csv = None, output = None, min_samples = 2, nthreads = 1):
-    if csv is None: 
-        logger.error("No csv file provided")
+def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, nthreads = 1):
+    if tsv is None: 
+        logger.error("No tsv file provided")
         return
     if output is None:
         output = "clusters." + '%012x' % random.randrange(16**12) 
-        logger.warning (f"No output file specified, writing to file {output}")
+        logger.warning (f"No output file specified, writing to file {output}.tsv")
 
-    df = pd.read_csv (csv, compression="infer", sep=",", dtype='unicode')
+    df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
     #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
     primers = df["primer"].tolist()
-    logger.info(f"Read {len(primers)} primers from file {csv}; will now calculate pairwise distances")
+    logger.info(f"Read {len(primers)} primers from file {tsv}; will now calculate pairwise distances")
     distmat = score_to_distance_matrix_fraction (create_NW_score_matrix(primers), mafft=True)
     with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
         cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
     df["cluster"] = cl.labels_
-    logger.info(f"Clustering done, writing to file {output}.csv")
-    df.to_csv (f"{output}.csv", sep=",", index=False)
+    logger.info(f"Clustering done, writing to file {output}.tsv")
+    df.to_csv (f"{output}.tsv", sep="\t", index=False)
 
 def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seqs don't need to be aligned, must be strings
     if use_parasail:
