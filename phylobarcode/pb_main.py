@@ -5,7 +5,7 @@ stream_log = logging.StreamHandler()
 #log_format = logging.Formatter(fmt='phylobarcode___main %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d%H:%M") # now it's shared 
 log_format = logging.Formatter(fmt='phylobarcode %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 stream_log.setFormatter(log_format)
-stream_log.setLevel(logging.DEBUG)
+stream_log.setLevel(logging.INFO)
 
 #logger = logging.getLogger(__name__) # this creates one logger per module, but I want one logger for the whole program
 logger = logging.getLogger("phylobarcode_global_logger") # creates a named global logger
@@ -42,8 +42,8 @@ def run_merge_fasta_gff (args):
     from phylobarcode import task_fasta_gff
     generate_prefix_for_task (args, "fastagff")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
-    task_fasta_gff.merge_fasta_gff (fastadir=args.fasta, gffdir=args.gff, fasta_csvfile = args.csv_fasta, 
-            gff_csvfile = args.csv_gff, scratch=args.scratch, output=args.prefix)
+    task_fasta_gff.merge_fasta_gff (fastadir=args.fasta, gffdir=args.gff, fasta_tsvfile = args.tsv_fasta, 
+            gff_tsvfile = args.tsv_gff, scratch=args.scratch, gtdb = args.gtdb, output=args.prefix)
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
@@ -135,10 +135,10 @@ class ParserWithErrorHelp(argparse.ArgumentParser):
 def main():
     parent_parser = ParserWithErrorHelp(description=long_description, add_help=False)
     parent_group = parent_parser.add_argument_group('Options common to all commands (some commands may not use them)')
-    parent_group.add_argument('--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.WARNING, 
+    parent_group.add_argument('--debug', action="store_const", dest="loglevel", const=logging.DEBUG, default=logging.INFO, 
             help="Print debugging statements (most verbose)")
-    parent_group.add_argument('--verbose', action="store_const", dest="loglevel", const=logging.INFO, 
-            help="Add verbosity")
+    parent_group.add_argument('--silent', action="store_const", dest="loglevel", const=logging.WARNING, 
+            help="Less verbose output (only warnings and errors)")
     parent_group.add_argument('--nthreads', metavar='int', type=int, 
             help="Number of threads requested (default = maximum available)")
     parent_group.add_argument('--outdir', metavar="</path/dir/>", action="store", 
@@ -155,18 +155,24 @@ def main():
     subp= main_parser.add_subparsers(dest='Commands', description=None, title="Commands", required=True)
 
     # TODO: deduplicate (using genus+sourmash) and add GTDB info
-    this_help = "Given one folder with fasta files and one with GFF files of reference genomes, creates a table with matches. "
+    this_help = "Given one folder with fasta, one with GFF files of reference genomes, and a GTDB metadata file, creates a table with matches. "
     extra_help= '''\n
     The fasta and GFF files are recognised by their extensions (fasta, fna, faa, gff, gff3) with optional compression.
-    You can add a CSV file with GFF and fasta info from a previous run (e.g. to add more genomes). 
+    You can add a TSV file with GFF and fasta info from a previous run (e.g. to add more genomes or to include the GTDB
+    taxonomy and thus generate a TSV table with the matches).
+    This program works without a GTDB metadata file, in which case it will only generate only the individual fasta and GFF3
+    tables. However the information from the GTDB metadata file is required in downstream analyses, and thus the final
+    table with matches is only generated if a GTDB metadata file is provided.
+    Notice that we use TSV instead of CSV because the latter is not compatible with NCBI taxonomy shenanigans (commas in names).
     '''
     up_findp = subp.add_parser('merge_fasta_gff', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('-a', '--fasta', metavar="<dir>", required=True, 
             help="directory where fasta genomic files can be found (required)") # technically not needed if gff3 contains fasta
     up_findp.add_argument('-g', '--gff',   metavar="<dir>", required=True, help="directory with GFF3 files (required)")
-    up_findp.add_argument('-A', '--csv_fasta', metavar="csv", help="CSV file with fasta entries from previous run (optional)")
-    up_findp.add_argument('-G', '--csv_gff',   metavar="csv", help="CSV file with GFF entries from previous run (optional)")
+    up_findp.add_argument('-A', '--tsv_fasta', metavar="tsv", help="tsv file with fasta entries from previous run (optional)")
+    up_findp.add_argument('-G', '--tsv_gff',   metavar="tsv", help="tsv file with GFF entries from previous run (optional)")
+    up_findp.add_argument('-d', '--gtdb', metavar="tsv[.xz,.gz]", help="GTDB metadata tsv file (optional but needed downstream)")
     up_findp.set_defaults(func = run_merge_fasta_gff)
 
     this_help = "Find primers given a fasta file." # help is shown in "prog -h", description is shown in "prog this -h"
@@ -205,7 +211,7 @@ def main():
     extra_help= '''\n
     If several csv files are given, default output files will keep their unique names (i.e. without common prefix or
     suffix). The OPTICS algorithm is used to cluster primers.
-    The input CSV files should be the output of `find_primers`.
+    The input CSV files here should be the output of `find_primers`.
     '''
     up_findp = subp.add_parser('cluster_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)

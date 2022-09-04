@@ -126,15 +126,15 @@ def save_primers_to_file (ldic, rdic, output): # below, each v = dict[k] = [[pen
     llist.sort(key=lambda x: x[1], reverse=True)
     rlist.sort(key=lambda x: x[1], reverse=True)
 
-    with open_anyformat (f"{output}_l.csv", "w") as f:
-        f.write (str("primer,frequency,penalty,min_distance,max_distance\n").encode())
+    with open_anyformat (f"{output}_l.tsv", "w") as f:
+        f.write (str("primer\tfrequency\tpenalty\tmin_distance\tmax_distance\n").encode())
         for x in llist:
-            f.write (str(f"{x[0]},{x[1]},{x[2]},{x[3]},{x[4]}\n").encode()) # encode() is needed in case output is compressed
-    with open_anyformat (f"{output}_r.csv", "w") as f:
-        f.write (str("primer,frequency,penalty,min_distance,max_distance\n").encode())
+            f.write (str(f"{x[0]}\t{x[1]}\t{x[2]}\t{x[3]}\t{x[4]}\n").encode()) # encode() is needed in case output is compressed
+    with open_anyformat (f"{output}_r.tsv", "w") as f:
+        f.write (str("primer\tfrequency\tpenalty\tmin_distance\tmax_distance\n").encode())
         for x in rlist:
-            f.write (str(f"{x[0]},{x[1]},{x[2]},{x[3]},{x[4]}\n").encode())
-    logger.info (f"Saved primers to {output}_l.csv and {output}_r.csv")
+            f.write (str(f"{x[0]}\t{x[1]}\t{x[2]}\t{x[3]}\t{x[4]}\n").encode())
+    logger.info (f"Saved primers to {output}_l.tsv and {output}_r.tsv")
 
 def extract_primer_from_output (output, seqname, seqlen):
     '''
