@@ -1,4 +1,4 @@
-<img src="phylobarcode.png" height="150" align="right">
+<img src="assets/phylobarcode.png" height="150" align="right">
 
 # phylobarcode
 
