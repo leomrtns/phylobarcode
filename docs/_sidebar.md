@@ -1,2 +1,2 @@
 - [README](README.md)
-- [DB generation](01.database_generation.md "Example of blast database generation")
+- [Databases](01.database_generation.md "Database generation and merging")
