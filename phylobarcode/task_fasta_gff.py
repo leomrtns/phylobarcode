@@ -16,15 +16,6 @@ logger = logging.getLogger("phylobarcode_global_logger")
 #stream_log.setLevel(logging.INFO)
 #logger.addHandler(stream_log)
 
-
-gtdb_columns_keep = ['accession', 'gtdb_genome_representative', 'gtdb_taxonomy', 'ssu_query_id', 
-        'ncbi_assembly_name', 'ncbi_genbank_assembly_accession', 'ncbi_strain_identifiers', 'ncbi_taxid',
-        'ncbi_taxonomy', 'ncbi_taxonomy_unfiltered']
-gtdb_columns_rename = {
-        'accession': 'gtdb_accession', 
-        'ssu_query_id': 'seqid'}
-
-
 def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfile = None, gtdb = None, scratch=None, output=None):
     hash_name = '%012x' % random.randrange(16**12)  # use same file random file name for all files (notice that main script should have taken care of these)
     if fastadir is None: 
@@ -53,6 +44,7 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
     # get sequence names as dataframe
     fasta_files, fasta_tsv = update_tsv_from_filenames (fasta_files, fasta_tsvfile, "fasta_file")
     if len(fasta_files):
+        logger.info(f"{len(fasta_files)} fasta files in {fastadir} not described in {fasta_tsvfile}")
         a = [] # list of lists (samples=rows, features=columns)
         for fasfile in fasta_files:
             a.extend(split_headers_in_fasta (fasfile)) # append() would create 3x list; extend() "flattens" each element like "plus"
@@ -82,9 +74,10 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
     # get GFF chromosomes (excludes plasmids), using scratch dir to store the sqlite db, as dataframe
     gff_files, gff_tsv = update_tsv_from_filenames (gff_files, gff_tsvfile, "gff_file")
     if len(gff_files):
+        logger.info(f"{len(gff_files)} gff files in {gffdir} not described in {gff_tsvfile}")
         dbfile = f"{scratch}/gff.db"
         a = []
-        for gffile in gff_files[::4]:
+        for gffile in gff_files[::10]:
             #dbfile = f"{scratch}/{pathlib.Path(gffile).stem}.db" # Path = os.path.basename but "stem" removes extension
             a.extend(split_region_elements_in_gff (gffile, dbfile))
         a = list(map(list, zip(*a))) # transpose list of lists so that each row is one feature
@@ -119,11 +112,8 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
         return
     logger.info(f"Found {len(df)} common entries in fasta and gff files; Will now read GTDB file {gtdb} and merge")
 
-    # get GTDB taxonomy as dataframe
-    df_gtdb = pd.read_csv(gtdb, sep="\t", dtype=str)
-    df_gtdb = df_gtdb[gtdb_columns_keep] # remove most columns
-    df_gtdb.rename(columns=gtdb_columns_rename, inplace=True) # rename columns to match other tables
-    df = pd.merge(df, df_gtdb, on='seqid', how='left')
+    # get GTDB taxonomy as dataframe and merge with existing dataframe (gff+fasta info)
+    df = read_gtdb_taxonomy_and_merge (gtdb, df)
     full_dlen = len(df) - df["gtdb_accession"].isnull().sum() # sum=count null values
 
     tsvfilename = f"{output}_merged.tsv.gz"
@@ -146,8 +136,10 @@ def update_tsv_from_filenames (files, tsvfile, columnname):
     df = pd.read_csv (tsvfile, sep="\t", dtype=str)
     if columnname not in df.columns:
         logger.error(f"tsv file {tsvfile} does not have column {columnname}"); return files, None
-    new_files = [f for f in files if os.path.basename(f) not in df[columnname].unique()] 
-    old_files = [os.path.basename(f) for f in list(set(files) - set(new_files))]
+    new_files = df[columnname].unique()
+    new_files = [f for f in files if os.path.basename(f) not in new_files]
+    old_files = list(set(files) - set(new_files))
+    old_files = [os.path.basename(f) for f in old_files]
     df = df[df[columnname].isin(old_files)] # keep only rows with filenames found in files
     return new_files, df
 
@@ -171,3 +163,16 @@ def split_region_elements_in_gff (gff_file, database_file):
             a.append ([os.path.basename(gff_file), ft.seqid, longname, ft["Dbxref"][0].replace("taxon:","")]) # filename + seqid + longname + Dbxref
     return a
 
+def read_gtdb_taxonomy_and_merge (gtdb_file, df):
+    gtdb_columns_keep = ['accession', 'gtdb_genome_representative', 'gtdb_taxonomy', 'ssu_query_id', 'ncbi_assembly_name', 
+            'ncbi_genbank_assembly_accession', 'ncbi_strain_identifiers', 'ncbi_taxid', 'ncbi_taxonomy'] #  'ncbi_taxonomy_unfiltered' is not used
+
+    df_gtdb = pd.read_csv(gtdb_file, sep="\t", dtype=str)
+    df_gtdb = df_gtdb[gtdb_columns_keep] # remove most columns
+
+    gtdb_columns_rename = {'accession': 'gtdb_accession', 'ssu_query_id': 'seqid'}
+    df_gtdb.rename(columns=gtdb_columns_rename, inplace=True) # rename columns to match other tables
+ 
+    df_gtdb = pd.merge(df, df_gtdb, on='seqid', how='left')
+
+    return df_gtdb

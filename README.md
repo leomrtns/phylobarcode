@@ -13,9 +13,11 @@ It can search for potential long segments ('operons' or 'barcodes') which can se
 It can then search for potential primers which can be used to amplify the operon.
 And it can be used to reconstruct the evolutionary history of the amplicons.
 
+## Documentation
+
+The documentation can be found in https://quadram-institute-bioscience.github.io/phylobarcode/
 
 ## Installation
-
 
 ### Requirements
 
