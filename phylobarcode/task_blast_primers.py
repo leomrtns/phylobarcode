@@ -76,8 +76,9 @@ def query_primers_blastn_on_database_parallel (primer_list, database=None, evalu
     n_primers = len(primer_list)
     if nthreads > n_primers: nthreads = len(primer_list)
     chunk_size = n_primers//nthreads + 1 # no garantee that all threads will be used, specially if chumk_size is small like 2 or 3
+    ## see extract_riboproterins, ids below might not be needed since python handles properly indices exceeding list length
     chunk_ids = [i for i in range(0, n_primers, chunk_size)] + [n_primers] # from [i] to [i+1] excusive
-    nthreads = len(chunk_ids) - 1
+    nthreads = len(chunk_ids) - 1 
     primers_per_thread = [primer_list[chunk_ids[i]:chunk_ids[i+1]] for i in range(nthreads)]
     ncpus = multiprocessing.cpu_count() // nthreads
     if ncpus < 1: ncpus = 1

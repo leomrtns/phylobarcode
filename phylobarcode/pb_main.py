@@ -43,7 +43,7 @@ def run_merge_fasta_gff (args):
     generate_prefix_for_task (args, "fastagff")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     task_fasta_gff.merge_fasta_gff (fastadir=args.fasta, gffdir=args.gff, fasta_tsvfile = args.tsv_fasta, 
-            gff_tsvfile = args.tsv_gff, scratch=args.scratch, gtdb = args.gtdb, output=args.prefix)
+            gff_tsvfile = args.tsv_gff, scratch=args.scratch, gtdb = args.gtdb, output=args.prefix, nthreads = args.nthreads)
 
 def run_extract_riboproteins (args):
     from phylobarcode import task_extract_riboproteins
@@ -59,10 +59,7 @@ def run_find_primers (args):
         logger.info("Single-threaded mode requested by user")
         task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
         return
-    try: # I could have used the same function with nthreads=1 but I already had this function to benchmark single threaded
-        from multiprocessing import Pool
-        from functools import partial
-    except ImportError:
+    if defaults["nthreads"] < 2:
         logger.warning("Multiprocessing not available, falling back to single-threaded mode")
         task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
         return
@@ -148,11 +145,11 @@ def main():
             help="Less verbose output (only warnings and errors)")
     parent_group.add_argument('--nthreads', metavar='int', type=int, 
             help="Number of threads requested (default = maximum available)")
-    parent_group.add_argument('--outdir', metavar="</path/dir/>", action="store", 
+    parent_group.add_argument('--outdir', metavar="<dir/>", action="store", 
             help="Output directory. Default: working directory")
     parent_group.add_argument('--scratch', action="store", 
             help="Existing scratch directory (i.e. path must exist). Default: working directory")
-    parent_group.add_argument('--prefix', metavar="<no_extension>", 
+    parent_group.add_argument('--prefix', metavar="string", 
             help="optional file name --- just the prefix, since suffixes (a.k.a. extensions) are added by the program")
     parent_group.add_argument('--version', action='version', version=f"%(prog)s {__version__}") ## called with subcommands
 
@@ -189,7 +186,7 @@ def main():
     directory, which should contain all files mentioned in the table.
     It does not need the fasta files, and it will store all needed info from the GFF files in a single TSV file.
     '''
-    up_findp = subp.add_parser('extract_riboproteins', help=this_help, description=this_help + extra_help, parents=[parent_parser],
+    up_findp = subp.add_parser('extract_riboprots', help=this_help, description=this_help + extra_help, parents=[parent_parser],
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('tsv', help="tsv file with matches (required)")
     up_findp.add_argument('-g', '--gff',   metavar="<dir>", required=True, help="directory with GFF3 files (required)")
@@ -279,6 +276,12 @@ def main():
     else: # in any case, scratch will be a subdirectory of existing scratch area (which we can delete it with shutil.rmtree())
         defaults["scratch"] = args.scratch = os.path.join(defaults["current_dir"], defaults["scratch"])
 
+    try:
+        from multiprocessing import Pool
+        from functools import partial
+    except ImportError:
+        logger.warning ("Multiprocessing not available, setting single thread as default")
+        defaults["threads"] = 1
     if args.nthreads:
         if args.nthreads < 1: args.nthreads = 1
         if args.nthreads > defaults["nthreads"]:

@@ -24,5 +24,54 @@ def extract_riboproteins (tsvfile = None, gffdir=None, output=None, nthreads=1, 
     # create scratch directory (usually it's a subdirectory of the user-given scratch directory)
     pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
 
+    df = pd.read_csv (tsvfile, sep="\t", dtype=str)
+    df.dropna(subset=["gtdb_accession"], inplace=True) # same as df = df[~df["gtdb_accession"].isnull()]
+
+    gfiles = []
+    for gf in df["gff_file"].unique():
+        fullgf = os.path.join (gffdir, gf)
+        if os.path.isfile (fullgf): gfiles.append (gf)
+        else: logger.error (f"GFF file {fullgf} does not exist, skipping")
+
+    if (nthreads > 1): # main() already checked that modules are available (o.w. nthreads=1)
+        logger.info (f"Extracting ribosomal proteins from {len(gfiles)} GFF3 files using up to {nthreads} threads")
+        from multiprocessing import Pool
+        from functools import partial
+        n_files = len (gfiles)
+        if nthreads > n_files: nthreads = n_files
+        chunk_size = n_files // nthreads + 1 
+        gfile_chunks = [gfiles[i:i+chunk_size] for i in range(0, n_files, chunk_size)]
+        with Pool (len(gfile_chunks)) as p:
+            results = p.map (partial(get_features_from_gff, gff_dir=gffdir, scratch_dir=scratch), gfile_chunks)
+        tbl = [row for chunk in results if chunk is not None for row in chunk] # [[[1,2],[4,5]], [[7,8],[10,11]]] -> [[1,2],[4,5],[7,8],[10,11]]
+
+    else: ## one thread
+        logger.info (f"Extracting ribosomal proteins from {len(gfiles)} GFF3 files using a single thread")
+        tbl = get_features_from_gff (gff_file = gf, gff_dir = gffdir, scratch_dir = scratch)
+
+    logger.info (f"Extracted information about {len(tbl)} ribosomal proteins")
+    
+    tbl = list(map(list, zip(*tbl))) # transpose s.t. each row is a feature
+    tbl = {k:v for k,v in zip (["seqid","start", "end", "strand", "product"], tbl)}
+    df = pd.DataFrame.from_dict (tbl, orient="columns")
+    tsvfile = f"{output}.tsv.gz"
+    df.to_csv (tsvfile, sep="\t", index=False)
+    logger.info (f"Saved information about ribosomal proteins to {tsvfile}")
+
     # delete scratch subdirectory and all its contents
     shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
+
+def get_features_from_gff (gff_file_list, gff_dir, scratch_dir):
+    database = os.path.join (scratch_dir, os.path.basename(gff_file_list[0]) + ".db") ## unique name for the database, below scratch dir
+    a = []
+    for gf in gff_file_list:
+        gff_file = os.path.join (gff_dir, gf) ## full path to GFF3 file
+        db = gffutils.create_db(gff_file, dbfn=database, force=True, keep_order=False, merge_strategy="merge", sort_attribute_values=False)
+        for i in db.features_of_type('CDS'):
+            if any ("ribosomal protein" in str.lower(x) for x in i.attributes["product"]):
+                prod = str.upper(i.attributes["product"][0])
+                prod = prod[prod.find('RIBOSOMAL PROTEIN')+17:] # remove "ribosomal protein" from beginning; find() returns -1 if not found or idx of first match
+                a.append ([i.seqid, i.start, i.end, i.strand, prod]) # gff_file doesnt know which seq from fasta file, seqid does
+
+    #pathlib.Path(database).unlink() # delete database file (delete whole tree later)
+    return a

@@ -16,7 +16,7 @@ logger = logging.getLogger("phylobarcode_global_logger")
 #stream_log.setLevel(logging.INFO)
 #logger.addHandler(stream_log)
 
-def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfile = None, gtdb = None, scratch=None, output=None):
+def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfile = None, gtdb = None, scratch=None, output=None, nthreads = 1):
     hash_name = '%012x' % random.randrange(16**12)  # use same file random file name for all files (notice that main script should have taken care of these)
     if fastadir is None: 
         logger.error("No fasta directory provided"); return
@@ -45,9 +45,18 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
     fasta_files, fasta_tsv = update_tsv_from_filenames (fasta_files, fasta_tsvfile, "fasta_file")
     if len(fasta_files):
         logger.info(f"{len(fasta_files)} fasta files in {fastadir} not described in {fasta_tsvfile}")
-        a = [] # list of lists (samples=rows, features=columns)
-        for fasfile in fasta_files:
-            a.extend(split_headers_in_fasta (fasfile)) # append() would create 3x list; extend() "flattens" each element like "plus"
+        if (nthreasd > 1):
+            logger.info(f"Using up to {nthreads} threads to read fasta headers")
+            chunks = generate_thread_chunks (fasta_files, nthreads) # list of filename lists, one per thread
+            from multiprocessing import Pool
+            from functools import partial
+            with Pool(len(chunks)) as p:
+                results = p.map(partial(split_headers_in_fasta), chunks)
+            a = [row for sublist in results if sublist is not None for row in sublist] # [[[1,2]], [[7,8],[10,11]]] -> [[1,2],[7,8],[10,11]]
+        else:
+            logger.info(f"Using a single thread to read fasta headers")
+            a = split_headers_in_fasta (fasta_files) # list of lists (samples=rows, features=columns)
+
         a = list(map(list, zip(*a))) # transpose list of lists (https://stackoverflow.com/questions/6473679/python-transpose-list-of-lists)
         a = {"fasta_file": a[0], "seqid": a[1], "fasta_description": a[2]} # dictionary of lists (one row is chromosome and others are plasmids usually)
         df_fasta = pd.DataFrame.from_dict(a, orient='columns')
@@ -75,11 +84,18 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
     gff_files, gff_tsv = update_tsv_from_filenames (gff_files, gff_tsvfile, "gff_file")
     if len(gff_files):
         logger.info(f"{len(gff_files)} gff files in {gffdir} not described in {gff_tsvfile}")
-        dbfile = f"{scratch}/gff.db"
-        a = []
-        for gffile in gff_files[::10]:
-            #dbfile = f"{scratch}/{pathlib.Path(gffile).stem}.db" # Path = os.path.basename but "stem" removes extension
-            a.extend(split_region_elements_in_gff (gffile, dbfile))
+        if (nthreads > 1):
+            logger.info(f"Using up to {nthreads} threads to read gff headers")
+            chunks = generate_thread_chunks (gff_files, nthreads)
+            from multiprocessing import Pool
+            from functools import partial
+            with Pool(len(chunks)) as p:
+                results = p.map(partial(split_region_elements_in_gff, scratchdir=scratch), chunks)
+            a = [row for sublist in results if sublist is not None for row in sublist] # [[[1,2]], [[7,8],[10,11]]] -> [[1,2],[7,8],[10,11]]
+        else:
+            logger.info(f"Using a single thread to read gff headers")
+            a = split_region_elements_in_gff (gff_files, scratchdir=scratch) # list of lists (samples=rows, features=columns)
+
         a = list(map(list, zip(*a))) # transpose list of lists so that each row is one feature
         a = {"gff_file": a[0], "seqid": a[1], "gff_description": a[2], "gff_taxonid": a[3]} # dictionary of lists (usually one row only since chromosome)
         df_gff = pd.DataFrame.from_dict(a, orient='columns')
@@ -121,7 +137,6 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
     print (df.head())
     df.to_csv (tsvfilename, sep="\t", index=False)
 
-
 def list_of_files_by_extension (dirname, extension):
     files = []
     for ext in extension:
@@ -143,24 +158,29 @@ def update_tsv_from_filenames (files, tsvfile, columnname):
     df = df[df[columnname].isin(old_files)] # keep only rows with filenames found in files
     return new_files, df
 
-def split_headers_in_fasta (fasta_file):
-    a = [x.split(",")[0] for x in read_fasta_headers_as_list (fasta_file)] # read_fasta_headers is defined in
-    a = [[os.path.basename(fasta_file), x.split(" ",1)[0], x.split(" ",1)[1]] for x in a] # filename +  split on first space
-    return a
+def split_headers_in_fasta (fasta_file_list):
+    a2 = []
+    for fas in fasta_file_list:
+        a = [x.split(",")[0] for x in read_fasta_headers_as_list (fas)] # read_fasta_headers is defined in
+        a = [[os.path.basename(fasta_file), x.split(" ",1)[0], x.split(" ",1)[1]] for x in a] # filename +  split on first space
+        a2.extend(a)
+    return a2
 
-def split_region_elements_in_gff (gff_file, database_file):
-    db = gffutils.create_db (gff_file, database_file, merge_strategy='create_unique', keep_order=True, force=True) # force to overwrite existing db
+def split_region_elements_in_gff (gff_file_list, scratchdir):
+    database_file = os.path.join(scratchdir, os.path.basename(gff_file_list[0]) + ".db")
     a = []
-    for ft in db.features_of_type('region', order_by='start'):
-        if "genome" in ft.attributes and ft.attributes['genome'][0] == 'chromosome': # skip plasmids
-            longname = ""
-            if ("old-name" in ft.attributes): 
-                longname = ft.attributes["old-name"][0] + ";" ## alternative to ft["old-name"]
-            if ("type-material" in ft.attributes): 
-                longname = ft.attributes["type-material"][0] + ";" 
-            if ("strain" in ft.attributes):
-                longname = ft.attributes["strain"][0] + ";"
-            a.append ([os.path.basename(gff_file), ft.seqid, longname, ft["Dbxref"][0].replace("taxon:","")]) # filename + seqid + longname + Dbxref
+    for gff_file in gff_file_list:
+        db = gffutils.create_db (gff_file, database_file, merge_strategy='create_unique', keep_order=True, force=True) # force to overwrite existing db
+        for ft in db.features_of_type('region', order_by='start'):
+            if "genome" in ft.attributes and ft.attributes['genome'][0] == 'chromosome': # skip plasmids
+                longname = ""
+                if ("old-name" in ft.attributes): 
+                    longname = ft.attributes["old-name"][0] + ";" ## alternative to ft["old-name"]
+                if ("type-material" in ft.attributes): 
+                    longname = ft.attributes["type-material"][0] + ";" 
+                if ("strain" in ft.attributes):
+                    longname = ft.attributes["strain"][0] + ";"
+                a.append ([os.path.basename(gff_file), ft.seqid, longname, ft["Dbxref"][0].replace("taxon:","")]) # filename + seqid + longname + Dbxref
     return a
 
 def read_gtdb_taxonomy_and_merge (gtdb_file, df):
@@ -176,3 +196,11 @@ def read_gtdb_taxonomy_and_merge (gtdb_file, df):
     df_gtdb = pd.merge(df, df_gtdb, on='seqid', how='left')
 
     return df_gtdb
+
+def generate_thread_chunks (files, nthreads):
+    n_files = len (files)
+    if nthreads > n_files: nthreads = n_files
+    chunk_size = n_files // nthreads + 1 
+    file_chunks = [files[i:i+chunk_size] for i in range(0, n_files, chunk_size)]
+    return file_chunks
+
