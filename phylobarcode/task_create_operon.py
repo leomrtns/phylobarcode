@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json? imports itertools, pathlib
 import pandas as pd, numpy as np
-import io, multiprocessing, shutil, gffutils, json
+import io, multiprocessing, shutil, gffutils
 from Bio.Blast import NCBIXML
 from Bio import Seq, SeqIO
 from Bio.SeqRecord import SeqRecord
@@ -10,7 +10,8 @@ from Bio.SeqRecord import SeqRecord
 #log_format = logging.Formatter(fmt='phylobarcode_fasgff %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 logger = logging.getLogger("phylobarcode_global_logger")
 
-def extract_riboproteins_from_gff (tsvfile = None, gffdir=None, output=None, jsonfile=None, nthreads=1, scratch=None):
+
+def extract_riboproteins (tsvfile = None, gffdir=None, output=None, nthreads=1, scratch=None):
     hash_name = '%012x' % random.randrange(16**12) 
     if gffdir is None: 
         logger.error("No GFF3 directory provided"); return
@@ -19,8 +20,6 @@ def extract_riboproteins_from_gff (tsvfile = None, gffdir=None, output=None, jso
     if output is None: ## this should not happen if function called from main script
         prefix = f"riboprot.{hash_name}"
         logger.warning (f"No output file specified, using {prefix} as prefix")
-    if jsonfile is None: 
-        jsonfile = os.path.join( os.path.dirname(os.path.abspath(__file__)), "data/riboprotein_names.json")
     if scratch is None: ## this should not happen if function called from main script; use current directory 
         scratch = f"scratch.{hash_name}"
     # create scratch directory (usually it's a subdirectory of the user-given scratch directory)
@@ -28,11 +27,6 @@ def extract_riboproteins_from_gff (tsvfile = None, gffdir=None, output=None, jso
 
     df = pd.read_csv (tsvfile, sep="\t", dtype=str)
     df.dropna(subset=["gtdb_accession"], inplace=True) # same as df = df[~df["gtdb_accession"].isnull()]
-    try:
-        ribonames = json.load(open(jsonfile, "r"))
-    except ValueError as e:
-        logger.error(f"Error loading riboprotein names from {jsonfile}: {e}")
-        ribonames = None
 
     gfiles = []
     for gf in df["gff_file"].unique():
@@ -49,12 +43,12 @@ def extract_riboproteins_from_gff (tsvfile = None, gffdir=None, output=None, jso
         chunk_size = n_files // nthreads + 1 
         gfile_chunks = [gfiles[i:i+chunk_size] for i in range(0, n_files, chunk_size)]
         with Pool (len(gfile_chunks)) as p:
-            results = p.map (partial(get_features_from_gff, gff_dir=gffdir, scratch_dir=scratch, ribonames=ribonames), gfile_chunks)
+            results = p.map (partial(get_features_from_gff, gff_dir=gffdir, scratch_dir=scratch), gfile_chunks)
         tbl = [row for chunk in results if chunk is not None for row in chunk] # [[[1,2],[4,5]], [[7,8],[10,11]]] -> [[1,2],[4,5],[7,8],[10,11]]
 
     else: ## one thread
         logger.info (f"Extracting ribosomal proteins from {len(gfiles)} GFF3 files using a single thread")
-        tbl = get_features_from_gff (gff_file = gf, gff_dir = gffdir, scratch_dir = scratch, ribonames = ribonames)
+        tbl = get_features_from_gff (gff_file = gf, gff_dir = gffdir, scratch_dir = scratch)
 
     logger.info (f"Extracted information about {len(tbl)} ribosomal proteins")
     
@@ -68,21 +62,17 @@ def extract_riboproteins_from_gff (tsvfile = None, gffdir=None, output=None, jso
     # delete scratch subdirectory and all its contents
     shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
 
-def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, ribonames):
+def get_features_from_gff (gff_file_list, gff_dir, scratch_dir):
     database = os.path.join (scratch_dir, os.path.basename(gff_file_list[0]) + ".db") ## unique name for the database, below scratch dir
     a = []
-    n_files = len (gff_file_list)
-    for i, gf in enumerate(gff_file_list):
-        if i and i % (n_files//10) == 0: logger.info (f"{round((i*100)/n_files,1)}% of files processed (from thread {gff_file_list[0]})")
+    for gf in gff_file_list:
         gff_file = os.path.join (gff_dir, gf) ## full path to GFF3 file
         db = gffutils.create_db(gff_file, dbfn=database, force=True, keep_order=False, merge_strategy="merge", sort_attribute_values=False)
         for i in db.features_of_type('CDS'):
             if any ("ribosomal protein" in str.lower(x) for x in i.attributes["product"]):
                 prod = str.upper(i.attributes["product"][0])
                 prod = prod[prod.find('RIBOSOMAL PROTEIN')+17:] # remove "ribosomal protein" from beginning; find() returns -1 if not found or idx of first match
-                if prod in ribonames.keys():  # to inspect all possible names, remove this if statement and store all `prod`
-                    prod = ribonames[prod] # replace with standard name
-                    a.append ([i.seqid, i.start, i.end, i.strand, prod]) # gff_file doesnt know which seq from fasta file, seqid does
+                a.append ([i.seqid, i.start, i.end, i.strand, prod]) # gff_file doesnt know which seq from fasta file, seqid does
 
     #pathlib.Path(database).unlink() # delete database file (delete whole tree later)
     return a

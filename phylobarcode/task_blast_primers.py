@@ -12,7 +12,8 @@ logger = logging.getLogger("phylobarcode_global_logger")
 
 database_fallback = "/media/teradisk/03.n114312_bigdata/blast/ref_prok_rep_genomes"
 
-def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, task="blastn", max_target_seqs = 1000, nthreads=1):
+def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, task="blastn", max_target_seqs = 1000,
+        taxon=None, nthreads=1):
     if tsv is None: 
         logger.error("Not a single tsv file provided, and I need two (one for for 5'/left and one for 3'/right primers)")
         return
@@ -24,7 +25,8 @@ def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, ta
         output = [prefix + "_left", prefix + "_right"]
         logger.warning (f"No output file specified, using {output[0]} and {output[1]}")
     if database is None:
-        logger.error("I need a blast database (full path with prefix of DB in blast format; usually filename without '.nal' or '.nsq')")
+        logger.error("I need a blast database (full path with prefix of DB in blast format;" +
+            "usually filename without '.nal' or '.nsq')")
         return
     if evalue > 10000: evalue = 10000
     if evalue < 1e-3: evalue = 1e-3
@@ -34,21 +36,39 @@ def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, ta
         logger.error("I need a task = 'blastn-short' or 'blastn'; I'll use 'blastn'")
 
     df_l = pd.read_csv (tsv[0], compression="infer", sep="\t", dtype='unicode')
-    df_r = pd.read_csv (tsv[1], compression="infer", sep="\t", dtype='unicode')
     primers_l = df_l["primer"].tolist()
+    logger.info(f"Read {len(primers_l)} primers from file {tsv[0]}")
+    df_r = pd.read_csv (tsv[1], compression="infer", sep="\t", dtype='unicode')
     primers_r = df_r["primer"].tolist()
-    logger.info(f"Read {len(primers_l)} primers from file {tsv[0]} and {len(primers_r)} from file {tsv[1]}; Running blast now")
+    logger.info(f"Read {len(primers_r)} primers from file {tsv[1]}; Running blast now")
+    if taxon:
+        taxon_df = pd.read_csv (taxon, compression="infer", sep="\t", dtype='unicode')
+        # use taxonid from gff file and NOT from GTDB taxonomy (since we may have fewer); however gtdb_taxonomy has e.g.
+        # d__Bacteria;p__Firmicutes;c__Bacilli;o__Bacillales;f__Bacillaceae_H;g__Priestia;s__Priestia megaterium
+        taxon_df = taxon_df[["seqid","gff_taxonid", "gtdb_taxonomy"]]
+        taxon_df["order"]  = taxon_df["gtdb_taxonomy"].str.split(";").str[3].str.split("__").str[1]
+        taxon_df["family"] = taxon_df["gtdb_taxonomy"].str.split(";").str[4].str.split("__").str[1]
+        taxon_df["genus"]  = taxon_df["gtdb_taxonomy"].str.split(";").str[5].str.split("__").str[1]
+        taxon_df["species"] = taxon_df["gtdb_taxonomy"].str.split(";").str[6].str.split("__").str[1]
+        taxon_df.drop(columns=["gtdb_taxonomy"], inplace=True)
+        taxon_df = taxon_df.rename(columns={"seqid":"sseqid", "gff_taxonid":"taxonid"})
+        logger.info(f"Read {len(taxon_df)} entries with taxonomic information from file {taxon}")
+    else:
+        taxon_df = None
+        logger.info(f"No taxonomic information provided, will not calculate taxonomic representativity")
 
     if nthreads < 2: # single BLAST job, still this one job will use all available CPUs
         ncpus = multiprocessing.cpu_count()
         if ncpus < 1: ncpus = 1
         logger.info(f"Using single thread with {ncpus} CPUs per blast job")
         logger.info(f"Running blast on left primers from file {tsv[0]}")
-        blast_l = query_primers_blastn_on_database (primers_l, database=database, evalue=evalue, task=task,
-            max_target_seqs=max_target_seqs, ncpus=ncpus)
+        blast_l = query_primers_blastn_on_database (primers_l, database=database, 
+            evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus)
+        calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
         logger.info(f"Running blast on right primers from file {tsv[1]}")
-        blast_r = query_primers_blastn_on_database (primers_r, database=database, evalue=evalue, task=task,
-            max_target_seqs=max_target_seqs, ncpus=ncpus)
+        blast_r = query_primers_blastn_on_database (primers_r, database=database, 
+            evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus)
+        calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
     else: # user wants several BLAST jobs
         try:
             from multiprocessing import Pool
@@ -57,20 +77,25 @@ def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, ta
             ncpus = multiprocessing.cpu_count()
             logger.error(f"Multiprocessing not available for python, will run one blast process with {ncpus} CPUs")
             logger.info(f"Running blast on left primers from file {tsv[0]}")
-            blast_l = query_primers_blastn_on_database (primers_l, database=database, evalue=evalue, task=task,
-                    max_target_seqs=max_target_seqs, ncpus=ncpus)
+            blast_l = query_primers_blastn_on_database (primers_l, database=database, 
+                evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus)
+            calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
+
             logger.info(f"Running blast on right primers from file {tsv[1]}")
-            blast_r = query_primers_blastn_on_database (primers_r, database=database, evalue=evalue, task=task,
-                    max_target_seqs=max_target_seqs, ncpus=ncpus)
+            blast_r = query_primers_blastn_on_database (primers_r, database=database, 
+                evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus)
+            calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
+
         else:
             logger.info(f"Running blast on left primers from file {tsv[0]}")
-            blast_l = query_primers_blastn_on_database_parallel (primers_l, database=database, evalue=evalue, task=task,
-                    max_target_seqs=max_target_seqs, nthreads=nthreads)
-            logger.info(f"Running blast on right primers from file {tsv[1]}")
-            blast_r = query_primers_blastn_on_database_parallel (primers_r, database=database, evalue=evalue, task=task,
-                    max_target_seqs=max_target_seqs, nthreads=nthreads)
+            blast_l = query_primers_blastn_on_database_parallel (primers_l, database=database, 
+                evalue=evalue, task=task, max_target_seqs=max_target_seqs, nthreads=nthreads)
+            calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
 
-    print (blast_l) # FIXME: need to save as tsv at least; STOPHERE
+            logger.info(f"Running blast on right primers from file {tsv[1]}")
+            blast_r = query_primers_blastn_on_database_parallel (primers_r, database=database, 
+                evalue=evalue, task=task, max_target_seqs=max_target_seqs, nthreads=nthreads)
+            calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
 
 def query_primers_blastn_on_database_parallel (primer_list, database=None, evalue = 1, task="blastn-short", max_target_seqs=1000, nthreads=1):
     n_primers = len(primer_list)
@@ -103,8 +128,9 @@ def query_primers_blastn_on_database (primer_list, database=None, evalue = 1, ta
         database = database_fallback
         logger.error(f"I need a database (full path with prefix of DB in blast format; usually filename without '.nal' \
                 or '.nsq'); I will try to use {database} but there are no guarantees it will work")
+    ## output is format 6 plus aligned query plus aligned subject
     cline = f"blastn -query - -db {database} -evalue {evalue} -task \"{task}\" -word_size 7 -out - \
-              -outfmt \"6 std qseq sseq\"  -max_target_seqs {max_target_seqs} -num_threads {ncpus}" ## format 6 plus aligned querey plus aligned subject
+              -outfmt \"6 std qseq sseq\"  -max_target_seqs {max_target_seqs} -num_threads {ncpus}"
     child = subprocess.Popen(cline, stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
                             universal_newlines=True, shell=(sys.platform!="win32"))
     records = [SeqRecord(Seq.Seq(seq), id=seq) for seq in primer_list] ## head is primer itself (like "> ACGTGT") 
@@ -120,7 +146,80 @@ def query_primers_blastn_on_database (primer_list, database=None, evalue = 1, ta
     df.columns = default_outfmt6_cols
     return df
 
-# legacy code
+def calculate_stats_and_write_files (blast, output, df, taxon_df):
+    ofname = output + ".raw.tsv"
+    blast.to_csv (ofname, sep="\t", index=False)
+    logger.info(f"Wrote {len(blast)} raw BLAST hits to file {ofname}")
+    df0 = stats_merge_blast_and_primers (blast, df, taxon_df)
+    ofname = output + ".stats.tsv"
+    df0.to_csv (ofname, sep="\t", index=False)
+    logger.info(f"Wrote stats about {len(df0)} primers to file {ofname}")
+
+def stats_merge_blast_and_primers (blast_df, primer_df, taxon_df=None):
+    """
+    add columns to primer tables with information from blast results (and taxonomic info if available)
+    """
+    def summarise_blast_df (blast_df, taxon_df=None, suffix=""):
+        df = blast_df.groupby("qseqid").agg({
+            "sseqid":["count","nunique"], 
+            "len_match":[("mean", lambda x: round(np.mean(x), 2))],
+            "evalue": [("mean", lambda x: round(np.mean(x),2))], # tuple = (name, function); must be in a list
+            "bitscore":"max", 
+            "qseq":longest_mode, 
+            "mismatch":[("n_mismatches",lambda x: x.gt(0).sum()),("perfect_matches", lambda x: x.eq(0).sum())] # list of tuples 
+            })
+        df.columns = ["_".join(i) for i in df.columns] # multiindex to single index
+        df = df.reset_index() # qseqid is index, not column
+        df["sseqid_count"] = round(df["sseqid_count"]/df["sseqid_nunique"], 2) # average number of hits per sequence
+        if taxon_df is not None:
+            df2 = blast_df.groupby("qseqid").agg({
+                "taxonid":"nunique", 
+                "family":"nunique",
+                "genus":"nunique",
+                "species":"nunique"
+                }).reset_index() # qseqid is index, not column
+            df = df.merge(df2, on="qseqid", how="left")
+        df.rename(columns={
+            "qseqid":"primer", 
+            "sseqid_count":"avge_hits" + suffix,
+            "sseqid_nunique":"unique_hits" + suffix,
+            "len_match_mean":"avge_match_length" + suffix,
+            "evalue_mean":"avge_evalue" + suffix,
+            "bitscore_max":"max_bitscore" + suffix,
+            "mismatch_n_mismatches": "n_mismatches" + suffix,
+            "mismatch_perfect_matches": "perfect_matches" + suffix,
+            "taxonid": "unique_taxonid" + suffix,
+            "family": "unique_family" + suffix,
+            "genus": "unique_genus" + suffix,
+            "species": "unique_species" + suffix,
+            "qseq_longest_mode":"aligned_primer" + suffix
+            }, inplace=True)
+        return df
+
+    def longest_mode (x):
+        x = pd.Series.mode(x)
+        if isinstance(x, str): return x
+        return sorted(x, key=len, reverse=True)[0]
+    
+    if taxon_df is not None: blast_df = blast_df.merge(taxon_df, on="sseqid", how="left")
+    # difference between full primer and matched region
+    blast_df["len_match"] = blast_df["qseqid"].str.len() - blast_df["length"]
+
+    df = summarise_blast_df (blast_df, taxon_df, "_all")
+
+    ## now on good matches only 
+    blast_df = blast_df[blast_df["len_match"] < 2] # almost perfect matches
+    df2 = summarise_blast_df (blast_df, taxon_df, "")
+    df = df.merge(df2, on="primer", how="left")
+
+    primer_df = primer_df.merge(df, on="primer", how="left")
+
+    return primer_df.sort_values( ["unique_hits", "avge_hits", "unique_family", "unique_genus", "unique_species", 
+             "avge_hits_all", "perfect_matches", "n_mismatches", "frequency"], 
+            ascending= [False, True, False, False, False, True, False, True, False])
+
+##    legacy code    ##
+
 def query_string_blastn_on_database (seqstring, database=None, evalue = 1, task="blastn", max_target_seqs=1000, nthreads=1):
     """ 
     task = "blastn-short" (more precise) or task = "blastn" 
@@ -137,3 +236,5 @@ def query_string_blastn_on_database (seqstring, database=None, evalue = 1, task=
     SeqIO.write(SeqRecord(Seq.Seq(seqstring)), child.stdin, "fasta")
     child.stdin.close()
     return NCBIXML.read(child.stdout)
+
+

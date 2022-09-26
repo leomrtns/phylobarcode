@@ -17,7 +17,7 @@ defaults = {
     "timestamp": datetime.datetime.now().strftime("%y%m%d_%H%M%S"),
     "nthreads": multiprocessing.cpu_count(),
     "scratch": 'phylobar.%016x' % random.randrange(16**16),
-#   "reference": os.path.join( os.path.dirname(os.path.abspath(__file__)), "data/MN908947.3.fas") 
+    "json_ribonames": os.path.join( os.path.dirname(os.path.abspath(__file__)), "data/riboprotein_names.json")
     }
 
 long_description = """
@@ -45,23 +45,25 @@ def run_merge_fasta_gff (args):
     task_fasta_gff.merge_fasta_gff (fastadir=args.fasta, gffdir=args.gff, fasta_tsvfile = args.tsv_fasta, 
             gff_tsvfile = args.tsv_gff, scratch=args.scratch, gtdb = args.gtdb, output=args.prefix, nthreads = args.nthreads)
 
-def run_extract_riboproteins (args):
+def run_extract_riboproteins_from_gff (args):
     from phylobarcode import task_extract_riboproteins
     generate_prefix_for_task (args, "riboprot")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
-    task_extract_riboproteins.extract_riboproteins (tsvfile=args.tsv, gffdir = args.gff, output=args.prefix, 
-            nthreads=args.nthreads, scratch=args.scratch)
+    task_extract_riboproteins.extract_riboproteins_from_gff (tsvfile=args.tsv, gffdir = args.gff, output=args.prefix, 
+            jsonfile = defaults["json_ribonames"], nthreads=args.nthreads, scratch=args.scratch)
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
     generate_prefix_for_task (args, "primers")
     if args.nthreads and args.nthreads < 2:
         logger.info("Single-threaded mode requested by user")
-        task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
+        task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, 
+                num_return=args.n_primers, output=args.prefix)
         return
     if defaults["nthreads"] < 2:
         logger.warning("Multiprocessing not available, falling back to single-threaded mode")
-        task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix)
+        task_find_primers.find_primers (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, 
+                num_return=args.n_primers, output=args.prefix)
         return
 
     if not args.nthreads: 
@@ -69,7 +71,8 @@ def run_find_primers (args):
         logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
     else:
         logger.info(f"{args.nthreads} threads were requested by user (actual pool may be smaller)")
-    task_find_primers.find_primers_parallel (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, num_return=args.n_primers, output=args.prefix, nthreads=args.nthreads)
+    task_find_primers.find_primers_parallel (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, 
+            num_return=args.n_primers, output=args.prefix, nthreads=args.nthreads)
     return
 
 def run_cluster_flanks (args):
@@ -111,7 +114,7 @@ def run_blast_primers (args):
     else:
         logger.info(f"{args.nthreads} threads were requested by user (actual pool may be smaller)")
     task_blast_primers.blast_primers_from_tsv (tsv=args.tsv, output=output, database = args.database, evalue=args.evalue, 
-            task=task, max_target_seqs = args.max_target_seqs, nthreads=args.nthreads)
+            task=task, max_target_seqs = args.max_target_seqs, taxon=args.taxon, nthreads=args.nthreads)
     return
 
 def remove_prefix_suffix (strlist):
@@ -186,11 +189,11 @@ def main():
     directory, which should contain all files mentioned in the table.
     It does not need the fasta files, and it will store all needed info from the GFF files in a single TSV file.
     '''
-    up_findp = subp.add_parser('extract_riboprots', help=this_help, description=this_help + extra_help, parents=[parent_parser],
+    up_findp = subp.add_parser('extract_riboprots_from_gff', help=this_help, description=this_help + extra_help, parents=[parent_parser],
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('tsv', help="tsv file with matches (required)")
     up_findp.add_argument('-g', '--gff',   metavar="<dir>", required=True, help="directory with GFF3 files (required)")
-    up_findp.set_defaults(func = run_extract_riboproteins)
+    up_findp.set_defaults(func = run_extract_riboproteins_from_gff)
 
     this_help = "Find primers given a fasta file." # help is shown in "prog -h", description is shown in "prog this -h"
     extra_help= '''\n
@@ -241,6 +244,7 @@ def main():
     extra_help= '''\n
     Needs exactly two tsv files, with left and right primers respectively. These tsv files should be the output of
     `find_primers` or `cluster_primers`. 
+    Optionally you can give the merged tsv file from `merge_fasta_gff` to use taxonomy information of hits
     Output files will keep their unique names (i.e. without common prefix or suffix)
     Can use multiple threads within each BLAST job, or to create several concurrent BLAST jobs.
     '''
@@ -252,10 +256,12 @@ def main():
             help="full path to database prefix")
     up_findp.add_argument('-e', '--evalue', type=float, default=1., 
             help="E-value threshold for blast (default=1, beware of low values)")
-    up_findp.add_argument('-m', '--max_target_seqs', type=int, default=100, 
-            help="max number of hist per primer (default=100)")
+    up_findp.add_argument('-m', '--max_target_seqs', type=int, default=1000, 
+            help="max number of hist per primer (default=1000; recommended to be close to number of genomes in blast DB)")
     up_findp.add_argument('-a', '--accurate', action="store_true", 
             help="use accurate blastn-short (default=regular blastn)")
+    up_findp.add_argument('-x', '--taxon', metavar='tsv',
+            help="tsv file with taxonomy information (output from 'merge_fasta_gff')")
     up_findp.set_defaults(func = run_blast_primers)
 
     args = main_parser.parse_args()
