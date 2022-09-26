@@ -73,7 +73,7 @@ def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, ribonames):
     a = []
     n_files = len (gff_file_list)
     for i, gf in enumerate(gff_file_list):
-        if i and i % (n_files//10) == 0: logger.info (f"{round((i*100)/n_files,1)}% of files processed (from thread {gff_file_list[0]})")
+        if i and i % (n_files//10) == 0: logger.info (f"{round((i*100)/n_files,1)}% of files processed in thread {gff_file_list[0]}")
         gff_file = os.path.join (gff_dir, gf) ## full path to GFF3 file
         db = gffutils.create_db(gff_file, dbfn=database, force=True, keep_order=False, merge_strategy="merge", sort_attribute_values=False)
         for i in db.features_of_type('CDS'):
