@@ -42,6 +42,7 @@ def extract_riboproteins_from_gff (tsvfile = None, gffdir=None, output=None, jso
 
     if (nthreads > 1): # main() already checked that modules are available (o.w. nthreads=1)
         logger.info (f"Extracting ribosomal proteins from {len(gfiles)} GFF3 files using up to {nthreads} threads")
+        logger.info (f"Threads are named after first file in pool (i.e. names are arbitrary and do not relate to file itself)")
         from multiprocessing import Pool
         from functools import partial
         n_files = len (gfiles)
@@ -54,6 +55,7 @@ def extract_riboproteins_from_gff (tsvfile = None, gffdir=None, output=None, jso
 
     else: ## one thread
         logger.info (f"Extracting ribosomal proteins from {len(gfiles)} GFF3 files using a single thread")
+        logger.info (f"Thread is named after first file in pool (i.e. name is arbitrary and does not relate to file itself)")
         tbl = get_features_from_gff (gff_file = gf, gff_dir = gffdir, scratch_dir = scratch, ribonames = ribonames)
 
     logger.info (f"Extracted information about {len(tbl)} ribosomal proteins")
@@ -73,14 +75,15 @@ def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, ribonames):
     a = []
     n_files = len (gff_file_list)
     for i, gf in enumerate(gff_file_list):
-        if i and i % (n_files//10) == 0: logger.info (f"{round((i*100)/n_files,1)}% of files processed in thread {gff_file_list[0]}")
+        if i and i % (n_files//10) == 0: 
+            logger.info (f"{round((i*100)/n_files,1)}% of files processed, {len(a)} riboprotein genes found so far from thread {gff_file_list[0]}")
         gff_file = os.path.join (gff_dir, gf) ## full path to GFF3 file
         db = gffutils.create_db(gff_file, dbfn=database, force=True, keep_order=False, merge_strategy="merge", sort_attribute_values=False)
         for i in db.features_of_type('CDS'):
             if any ("ribosomal protein" in str.lower(x) for x in i.attributes["product"]):
                 prod = str.upper(i.attributes["product"][0])
-                prod = prod[prod.find('RIBOSOMAL PROTEIN')+17:] # remove "ribosomal protein" from beginning; find() returns -1 if not found or idx of first match
-                if prod in ribonames.keys():  # to inspect all possible names, remove this if statement and store all `prod`
+                prod = prod[prod.find('RIBOSOMAL PROTEIN')+17:].lstrip() # remove "ribosomal protein" from beginning; find() returns -1 if not found or idx of first match
+                if ribonames and prod in ribonames.keys():  # to inspect all possible names, remove this if statement and store all `prod`
                     prod = ribonames[prod] # replace with standard name
                     a.append ([i.seqid, i.start, i.end, i.strand, prod]) # gff_file doesnt know which seq from fasta file, seqid does
 
