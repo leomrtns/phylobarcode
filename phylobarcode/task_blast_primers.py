@@ -64,11 +64,11 @@ def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, ta
         logger.info(f"Running blast on left primers from file {tsv[0]}")
         blast_l = query_primers_blastn_on_database (primers_l, database=database, 
             evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus)
-        calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
+        blast_l, df_l = calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
         logger.info(f"Running blast on right primers from file {tsv[1]}")
         blast_r = query_primers_blastn_on_database (primers_r, database=database, 
             evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus)
-        calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
+        blast_r, df_r = calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
     else: # user wants several BLAST jobs
         try:
             from multiprocessing import Pool
@@ -79,23 +79,25 @@ def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, ta
             logger.info(f"Running blast on left primers from file {tsv[0]}")
             blast_l = query_primers_blastn_on_database (primers_l, database=database, 
                 evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus)
-            calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
+            blast_l, df_l = calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
 
             logger.info(f"Running blast on right primers from file {tsv[1]}")
             blast_r = query_primers_blastn_on_database (primers_r, database=database, 
                 evalue=evalue, task=task, max_target_seqs=max_target_seqs, ncpus=ncpus)
-            calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
+            blast_r, df_r = calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
 
         else:
             logger.info(f"Running blast on left primers from file {tsv[0]}")
             blast_l = query_primers_blastn_on_database_parallel (primers_l, database=database, 
                 evalue=evalue, task=task, max_target_seqs=max_target_seqs, nthreads=nthreads)
-            calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
+            blast_l, df_l = calculate_stats_and_write_files (blast_l, output[0], df_l, taxon_df)
 
             logger.info(f"Running blast on right primers from file {tsv[1]}")
             blast_r = query_primers_blastn_on_database_parallel (primers_r, database=database, 
                 evalue=evalue, task=task, max_target_seqs=max_target_seqs, nthreads=nthreads)
-            calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
+            blast_r, df_r = calculate_stats_and_write_files (blast_r, output[1], df_r, taxon_df)
+    
+
 
 def query_primers_blastn_on_database_parallel (primer_list, database=None, evalue = 1, task="blastn-short", max_target_seqs=1000, nthreads=1):
     n_primers = len(primer_list)
@@ -146,32 +148,42 @@ def query_primers_blastn_on_database (primer_list, database=None, evalue = 1, ta
     df.columns = default_outfmt6_cols
     return df
 
-def calculate_stats_and_write_files (blast, output, df, taxon_df):
+def calculate_stats_and_write_files (blast, output, df, taxon_df=None):
+    ## add taxonomic information to raw blast results ##
+    if taxon_df is not None: blast = blast.merge(taxon_df, on="sseqid", how="left")
+    # difference between full primer and matched region
+    blast["len_match"] = blast["qseqid"].str.len() - blast["length"]
+
     ofname = output + ".raw.tsv"
     blast.to_csv (ofname, sep="\t", index=False)
     logger.info(f"Wrote {len(blast)} raw BLAST hits to file {ofname}")
-    df0 = stats_merge_blast_and_primers (blast, df, taxon_df)
+    df0 = stats_merge_blast_and_primers (blast, df)
     ofname = output + ".stats.tsv"
     df0.to_csv (ofname, sep="\t", index=False)
     logger.info(f"Wrote stats about {len(df0)} primers to file {ofname}")
+    return blast, df0
 
-def stats_merge_blast_and_primers (blast_df, primer_df, taxon_df=None):
+def stats_merge_blast_and_primers (blast_df, primer_df):
     """
     add columns to primer tables with information from blast results (and taxonomic info if available)
     """
-    def summarise_blast_df (blast_df, taxon_df=None, suffix=""):
+    def summarise_blast_df (blast_df, suffix=""):
         df = blast_df.groupby("qseqid").agg({
             "sseqid":["count","nunique"], 
-            "len_match":[("mean", lambda x: round(np.mean(x), 2))],
+            "len_match":[("mean", lambda x: round(np.mean(x),2))],
             "evalue": [("mean", lambda x: round(np.mean(x),2))], # tuple = (name, function); must be in a list
             "bitscore":"max", 
             "qseq":longest_mode, 
-            "mismatch":[("n_mismatches",lambda x: x.gt(0).sum()),("perfect_matches", lambda x: x.eq(0).sum())] # list of tuples 
+            "mismatch":[
+                ("mean", lambda x: round(np.mean(x),2)), 
+                ("n_mismatches",lambda x: x.gt(0).sum()),
+                ("perfect_matches", lambda x: x.eq(0).sum())
+                ] # list of tuples 
             })
         df.columns = ["_".join(i) for i in df.columns] # multiindex to single index
         df = df.reset_index() # qseqid is index, not column
         df["sseqid_count"] = round(df["sseqid_count"]/df["sseqid_nunique"], 2) # average number of hits per sequence
-        if taxon_df is not None:
+        if "taxonid" in blast_df.columns: ## taxonomic information is available
             df2 = blast_df.groupby("qseqid").agg({
                 "taxonid":"nunique", 
                 "family":"nunique",
@@ -186,6 +198,7 @@ def stats_merge_blast_and_primers (blast_df, primer_df, taxon_df=None):
             "len_match_mean":"avge_match_length" + suffix,
             "evalue_mean":"avge_evalue" + suffix,
             "bitscore_max":"max_bitscore" + suffix,
+            "mismatch_mean":"avge_mismatches" + suffix,
             "mismatch_n_mismatches": "n_mismatches" + suffix,
             "mismatch_perfect_matches": "perfect_matches" + suffix,
             "taxonid": "unique_taxonid" + suffix,
@@ -201,22 +214,50 @@ def stats_merge_blast_and_primers (blast_df, primer_df, taxon_df=None):
         if isinstance(x, str): return x
         return sorted(x, key=len, reverse=True)[0]
     
-    if taxon_df is not None: blast_df = blast_df.merge(taxon_df, on="sseqid", how="left")
-    # difference between full primer and matched region
-    blast_df["len_match"] = blast_df["qseqid"].str.len() - blast_df["length"]
-
-    df = summarise_blast_df (blast_df, taxon_df, "_all")
+    df = summarise_blast_df (blast_df, "_all")
 
     ## now on good matches only 
     blast_df = blast_df[blast_df["len_match"] < 2] # almost perfect matches
-    df2 = summarise_blast_df (blast_df, taxon_df, "")
+    df2 = summarise_blast_df (blast_df, "")
     df = df.merge(df2, on="primer", how="left")
 
     primer_df = primer_df.merge(df, on="primer", how="left")
 
-    return primer_df.sort_values( ["unique_hits", "avge_hits", "unique_family", "unique_genus", "unique_species", 
-             "avge_hits_all", "perfect_matches", "n_mismatches", "frequency"], 
-            ascending= [False, True, False, False, False, True, False, True, False])
+    return sort_primers_by_performance (primer_df)
+
+def sort_primers_by_performance (df):
+    sort_columns_dict = {
+            "unique_hits":False, 
+            "avge_hits":True, 
+            "unique_family":False, 
+            "unique_genus":False, 
+            "unique_species":False,
+            "avge_hits_all":True,
+            "perfect_matches":False,
+            "avge_mismatches":True,
+            "n_mismatches":True,
+            "frequency":False
+            }
+    sort_columns = [k for k in sort_columns_dict.keys() if k in df.columns] # taxon info may be missing
+    return df.sort_values(sort_columns, ascending=[sort_columns_dict[k] for k in sort_columns])
+
+def cross_hits_between_primer_sets (df_l, df_r):
+    """
+    original "refseq_riboprotein" compared all primer pairs for a given genome, keeping 
+    only primers with a single hit in the genome. 
+    """
+    def remove_close_numbers (x0, closeness=2):
+        """
+        from set of numbers closer than `closeness`, keep average between extremes
+        """
+        x = sorted(x0)
+        l = len(x)
+        b1 = [x[0]] + [x[i]     for i in range(1,l) if x[  i] - x[  i-1] > closeness]
+        b2 =          [x[l-i-1] for i in range(1,l) if x[l-i] - x[l-i-1] > closeness][::-1] + [x[l-1]]
+        return [(g+h)/2 for g,h in zip(b1,b2)]
+
+    return df_l, df_r
+
 
 ##    legacy code    ##
 
