@@ -45,7 +45,7 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
     fasta_files, fasta_tsv = update_tsv_from_filenames (fasta_files, fasta_tsvfile, "fasta_file")
     if len(fasta_files):
         logger.info(f"{len(fasta_files)} fasta files in {fastadir} not described in {fasta_tsvfile}")
-        if (nthreasd > 1):
+        if (nthreads > 1):
             logger.info(f"Using up to {nthreads} threads to read fasta headers")
             chunks = generate_thread_chunks (fasta_files, nthreads) # list of filename lists, one per thread
             from multiprocessing import Pool
@@ -161,8 +161,10 @@ def update_tsv_from_filenames (files, tsvfile, columnname):
 def split_headers_in_fasta (fasta_file_list):
     a2 = []
     for fas in fasta_file_list:
-        a = [x.split(",")[0] for x in read_fasta_headers_as_list (fas)] # read_fasta_headers is defined in
-        a = [[os.path.basename(fasta_file), x.split(" ",1)[0], x.split(" ",1)[1]] for x in a] # filename +  split on first space
+        # example header: >NZ_CP010000.1 Escherichia coli str. K-12 substr. MG1655, complete genome
+        # thus we remove everything after first comma ("complete genome" in most cases)
+        a = [x.split(",")[0] for x in read_fasta_headers_as_list (fas)] # read_fasta_headers is defined in pb_common.py
+        a = [[os.path.basename(fas), x.split(" ",1)[0], x.split(" ",1)[1]] for x in a] # filename +  split on first space
         a2.extend(a)
     return a2
 

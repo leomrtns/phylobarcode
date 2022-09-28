@@ -10,6 +10,20 @@ logger = logging.getLogger("phylobarcode_global_logger")
 base62 = string.digits + string.ascii_letters + '_.-+~@'  # 66 elements actually (62 is alphanum only)
 len_base62 = len (base62)
 
+def split_gtdb_taxonomy_from_dataframe (taxon_df, gtdb_column = "gtdb_taxonomy", drop_gtdb_column = True):
+    '''
+    Splits the GTDB taxonomy string into a list of taxonomic ranks: 
+    d__Bacteria;p__Firmicutes;c__Bacilli;o__Bacillales;f__Bacillaceae_H;g__Priestia;s__Priestia megaterium
+    '''
+    taxon_df["phylum"] = taxon_df[gtdb_column].str.split(";").str[1].str.split("__").str[1]
+    taxon_df["class"]  = taxon_df[gtdb_column].str.split(";").str[2].str.split("__").str[1]
+    taxon_df["order"]  = taxon_df[gtdb_column].str.split(";").str[3].str.split("__").str[1]
+    taxon_df["family"] = taxon_df[gtdb_column].str.split(";").str[4].str.split("__").str[1]
+    taxon_df["genus"]  = taxon_df[gtdb_column].str.split(";").str[5].str.split("__").str[1]
+    taxon_df["species"] = taxon_df[gtdb_column].str.split(";").str[6].str.split("__").str[1]
+    if (drop_gtdb_column): taxon_df.drop(columns = [gtdb_column], inplace = True)
+    return taxon_df
+
 def seq_to_base62 (seq): # https://stackoverflow.com/questions/1119722/base-62-conversion
     '''
     Convert a sequence to a base62 string of its integer representation.

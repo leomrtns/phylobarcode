@@ -46,11 +46,7 @@ def blast_primers_from_tsv (tsv=None, output=None, database = None, evalue=1, ta
         # use taxonid from gff file and NOT from GTDB taxonomy (since we may have fewer); however gtdb_taxonomy has e.g.
         # d__Bacteria;p__Firmicutes;c__Bacilli;o__Bacillales;f__Bacillaceae_H;g__Priestia;s__Priestia megaterium
         taxon_df = taxon_df[["seqid","gff_taxonid", "gtdb_taxonomy"]]
-        taxon_df["order"]  = taxon_df["gtdb_taxonomy"].str.split(";").str[3].str.split("__").str[1]
-        taxon_df["family"] = taxon_df["gtdb_taxonomy"].str.split(";").str[4].str.split("__").str[1]
-        taxon_df["genus"]  = taxon_df["gtdb_taxonomy"].str.split(";").str[5].str.split("__").str[1]
-        taxon_df["species"] = taxon_df["gtdb_taxonomy"].str.split(";").str[6].str.split("__").str[1]
-        taxon_df.drop(columns=["gtdb_taxonomy"], inplace=True)
+        taxon_df = split_gtdb_taxonomy_from_dataframe (taxon_df, drop_gtdb_column = True) # True = drop original column
         taxon_df = taxon_df.rename(columns={"seqid":"sseqid", "gff_taxonid":"taxonid"})
         logger.info(f"Read {len(taxon_df)} entries with taxonomic information from file {taxon}")
     else:
