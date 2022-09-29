@@ -237,7 +237,7 @@ def sort_primers_by_performance (df):
     sort_columns = [k for k in sort_columns_dict.keys() if k in df.columns] # taxon info may be missing
     return df.sort_values(sort_columns, ascending=[sort_columns_dict[k] for k in sort_columns])
 
-def cross_hits_between_primer_sets (df_l, df_r):
+def cross_hits_between_primer_sets (df_l, df_r): ## TODO: unfinished
     """
     original "refseq_riboprotein" compared all primer pairs for a given genome, keeping 
     only primers with a single hit in the genome. 

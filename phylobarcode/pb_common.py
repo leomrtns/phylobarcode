@@ -37,13 +37,14 @@ def seq_to_base62 (seq): # https://stackoverflow.com/questions/1119722/base-62-c
         integer //= len_base62
     return ret
 
-def read_fasta_as_list (filename, clean_sequence=True):
+def read_fasta_as_list (filename, clean_sequence=True, substring=None):
     unaligned = []
     with open_anyformat (filename, "r") as handle:
         for record in SeqIO.parse(handle, "fasta"):
             if clean_sequence:
                 record.seq  = Seq.Seq(str(record.seq.upper()).replace(".","N"))
-            unaligned.append(record)
+            if substring is None or any([x in record.description for x in substring]):
+                unaligned.append(record)
     logger.debug("Read %s sequences from file %s", str(len(unaligned)), filename)
     return unaligned
 

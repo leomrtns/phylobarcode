@@ -16,6 +16,12 @@ logger = logging.getLogger("phylobarcode_global_logger")
 #stream_log.setLevel(logging.INFO)
 #logger.addHandler(stream_log)
 
+# TODO:
+# 1. for instance Burkholderia multivorans strain P1Bm2011b has 3 chromosomes, we can extend GTDB info for all with same fasta file
+# 2. if plasmid has riboprot genes, we exclude them from merged fata+GFF but not from coordinates file (e.g. plasmid
+#    NZ_CP007068.1 belonging to Rhizobium leguminosarum bv. trifolii CB782 - GCF_000520875.1.fna.gz)
+# 3. deduplicate (sourmash or genus information)
+
 def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfile = None, gtdb = None, scratch=None, output=None, nthreads = 1):
     hash_name = '%012x' % random.randrange(16**12)  # use same file random file name for all files (notice that main script should have taken care of these)
     if fastadir is None: 

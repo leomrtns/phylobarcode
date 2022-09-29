@@ -57,7 +57,8 @@ def run_extract_operons_from_fasta (args):
     generate_prefix_for_task (args, "operons")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     task_extract_riboproteins.extract_operons_from_fasta (coord_tsvfile = args.coords, merge_tsvfile = args.tsv, 
-            fastadir=args.fasta, output=args.prefix, nthreads=args.nthreads)
+            fastadir=args.fasta, output=args.prefix, intergenic_space = args.intergenic, short_operon = args.short,
+            most_common_mosaics = args.most_common, nthreads=args.nthreads, scratch=args.scratch)
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
@@ -216,6 +217,12 @@ def main():
             help="directory where fasta genomic files can be found (required)")
     up_findp.add_argument('-c', '--coords', metavar="tsv", required=True, 
             help="tsv file with riboprotein coordinates for all genomes (required)")
+    up_findp.add_argument('-i', '--intergenic', metavar="int", default=1000, type=int,
+            help="maximum distance between riboproteins to be considered part of the same operon (default: 1000)")
+    up_findp.add_argument('-s', '--short', metavar="int", default=1500, type=int, 
+            help="minimum number of riboproteins in an operon if <= 100 or minimum operon length if > 100 (default: 1500)")
+    up_findp.add_argument('-m', '--most_common', metavar="int", default=100, type=int,
+            help="number of most common operon mosaic (gene patterns) to be saved to fasta files (default: 100)")
     up_findp.set_defaults(func = run_extract_operons_from_fasta)
 
     this_help = "Find primers given a fasta file." # help is shown in "prog -h", description is shown in "prog this -h"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json? imports itertools, pathlib
 import pandas as pd, numpy as np
-import io, multiprocessing, shutil, gffutils, json
+import io, multiprocessing, shutil, gffutils, json, collections
 from Bio.Blast import NCBIXML
 from Bio import Seq, SeqIO
 from Bio.SeqRecord import SeqRecord
@@ -99,7 +99,8 @@ def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, ribonames):
 
 # second command: extract DNA sequences using pandas table with riboprotein info
 
-def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir=None, output=None, nthreads=1, scratch=None):
+def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir=None, output=None, 
+        intergenic_space = 1000, short_operon = 1000, most_common_mosaics = 50, nthreads=1, scratch=None):
     hash_name = '%012x' % random.randrange(16**12) 
     if coord_tsvfile is None:
         logger.error ("No TSV file with riboprot coordinates from GFF3 files given, exiting"); sys.exit(1)
@@ -115,6 +116,15 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
     if scratch is None:
         scratch = f"scratch.{hash_name}"
         logger.warning (f"No scratch directory specified, using {scratch} as prefix")
+    if intergenic_space < 1:
+        logger.warning (f"Intergenic space is too small, setting to one")
+        intergenic_space = 1
+    if short_operon < 1:
+        logger.warning (f"Short operon is too small, setting to one (i.e. single genes are removed")
+        short_operon = 1
+    if most_common_mosaics < 2:
+        logger.warning (f"Most common mosaics {most_common_mosaics} is too small, setting to 2")
+        most_common_mosaics = 2
 
     coord_df = pd.read_csv (coord_tsvfile, sep="\t", dtype = str)
     if coord_df.empty:
@@ -124,11 +134,13 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
         logger.error (f"Merged file {merge_tsvfile} with fasta x GFF3 info is empty, exiting"); sys.exit(1)
 
     genome_list = coord_df["seqid"].unique().tolist()
+    genome_list = genome_list[::10] # for testing, only use every 10th genome
     # create scratch subdirectory
     pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # create scratch subdirectory
 
     if (nthreads > 1): ## multiple threads
         logger.info (f"Extracting operons from {len(genome_list)} genomes using {nthreads} threads")
+        logger.info (f"Thread is named after first file in pool (i.e. name is arbitrary and does not relate to file itself)")
         from multiprocessing import Pool
         from functools import partial
         genome_chunks = [genome_list[i::nthreads] for i in range(nthreads)]
@@ -136,65 +148,135 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
         for g in genome_chunks:
             cdf = coord_df[coord_df["seqid"].isin(g)]
             mdf = merge_df[merge_df["seqid"].isin(g)]
-            fname = f"{scratch}/coord.{g[0]}"
+            fname = f"{scratch}/coord.{g[0]}.gz"
             g_pool.append ([cdf, mdf, fname])
         with Pool(len(genome_chunks)) as p:
-            results = p.map(partial(extract_and_save_operons, fastadir=fastadir), g_pool)
+            results = p.map( partial(
+                        extract_and_save_operons, 
+                        fastadir=fastadir, 
+                        intergenic_space=intergenic_space, 
+                        short_operon=short_operon), 
+                    g_pool)
+        results = [elem for x in results for elem in x] # flatten list of lists [[1,2],[3,4]] -> [1,2,3,4]
     else: ## single thread
-        logger.info (f"Extracting operons from {len(genome_list)} genomes using 1 thread")
-        results = extract_and_save_operons ([coord_df, merge_df, f"{scratch}/coord"], fastadir)
+        logger.info (f"Extracting operons from {len(genome_list)} genomes using one thread")
+        logger.info (f"Thread is named arbitrarily")
+        g_pool = [[coord_df, merge_df, f"{scratch}/coord.fa.gz"]] # list of lists to be compatible with multithreaded
+        results = extract_and_save_operons (g_pool[0], fastadir=fastadir, intergenic_space=intergenic_space, short_operon=short_operon)
     
+    # results is a list of mosaics, we'll save the most common ones
+    moscounter = collections.Counter(results)
+    mosaics = [x[0] for x in moscounter.most_common(most_common_mosaics)] # get the 10 most common mosaics
+    tolog = "\n".join([f"Found in {x[1]} genomes:\t{x[0]}" for x in moscounter.most_common(10)])
+    logger.info (f"Finished scanning genomes, the {most_common_mosaics} most common mosaics will be saved, amongst them:\n{tolog}")
+
     operon_seqs = []
     for g in g_pool:
-        operon_seqs.extend (read_fasta_as_list (g[2]))
-    ofile = f"{output}.fasta.xz"
-    with open_anyformat (ofile, "w") as f:
-        for rec in operon_seqs:
-            f.write (f"> {rec.description}\n{rec.seq}\n").encode()
+        operon_seqs.extend (read_fasta_as_list (g[2], substring=mosaics))
+
+    save_mosaics_as_fasta (operon_seqs, output, mosaics)
     # delete scratch subdirectory and all its contents
     shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
 
-def extract_and_save_operons (pool_info, fastadir):
+def save_mosaics_as_fasta (operon_seqs, output, mosaics): # FIXME: never matches
+    for i, m in enumerate(mosaics):
+        ofile = f"{output}.{m}.fasta.xz"
+        counter = 0
+        with open_anyformat (ofile, "w") as f:
+            for rec in operon_seqs:
+                print (rec.description.split())
+                if rec.description.split()[1] == m: # header has format "> genomeID mosaic description"
+                    f.write (str(f"> {rec.description}\n{rec.seq}\n").encode())
+                    counter += 1
+        if i < 5:
+            logger.info (f"Succesfully saved {counter} operons to {ofile}")
+        elif i == 6:
+            logger.info (f"etc.")
+
+def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_operon=1000):
     coord_df, merge_df, fname = pool_info
     genome_list = coord_df["seqid"].unique().tolist()
-    fw = open_anyformat (fname, "a")
+    fw = open_anyformat (fname, "w")
 
-    for g in genome_list:
-        cdf = coord_df[coord_df["seqid"] == g]
-        mdf = merge_df[merge_df["seqid"] == g]
-
-        genome_sequence = read_fasta_as_list (os.path.join (fastadir, mdf["fasta_file"].iloc[0]))
-        genome_sequence = genome_sequence[0].seq
-        operons = operon_from_coords (genome_sequence, cdf)
-        for opr,seq in operons.items():
-            name = f"> {g} {opr} " + mdf["fasta_description"].iloc[0]
-            fw.write (f"{name}\n{seq}\n").encode()
-    fw.close()
-
-    def operon_from_coords (genome_sequence, coord_df, intergenic_space=100):
+    def operon_from_coords (genome_sequence, coord_df):
         hug_genes = ["S10","L3","L4","L2","S19","L22","S3","L16","S17","L14","L24","L5","S8","L6","L18","L15"] # 16 riboprots from Hug
         core_genes = hug_genes + ["L23","L29","S14","S5","L30"] 
         left_1_genes = ["L11","L1","L10","L7"] # L7 includes L7/L12 
         left_2_genes = ["S12","S7"]    
         right_genes  = ["L36","S13","S11","S4","L17"] # core between S7 and L36
+        coord_df = coord_df.sort_values(by=["start"], ascending=True)
+        coord_df = coord_df.reset_index(drop=True) # unlike iterate(), iterrows() returns index (before sorting)
         # remember that GFF is one-based
-        cdf.sort_values(["start"], ascending=True, inplace=True)
-        cdf["start"] = cdf["start"].astype(int) - 1 # convert to zero-based
-        cdf["end"] = cdf["end"].astype(int) - 1
-        minioperons = minioperon_merge_from_coords (cdf, intergenic_space)
+        coord_df["start"] = coord_df["start"].astype(int) - 1 # convert to zero-based
+        coord_df["end"] = coord_df["end"].astype(int) - 1
+        genome_length = len(genome_sequence)
+        minioperons, extra_space = minioperon_merge_from_coords (coord_df, genome_length)
+        minioperons = remove_short_operons (minioperons)
+        return dict_of_operons (minioperons, genome_sequence, extra_space)
         
-
-    def minioperon_merge_from_coords (df, intergenic_space=100):
-        # iterate over cdf rows
+    def minioperon_merge_from_coords (df, genome_length=0):
+        # iterate over cdf rows; minioperon will have [[gene1, ..., geneN], [start, end], strand]
+        minioperons = []
         for i, row in df.iterrows():
-            ## STOPHERE
+            if (i == 0) or (row["start"] - df.iloc[i-1]["end"] > intergenic_space) or (row["strand"] != df.iloc[i-1]["strand"]):
+                minioperons.append ([[row["product"]], [row["start"], row["end"]], row["strand"]])
+            elif (row["start"] - df.iloc[i-1]["end"] <= intergenic_space) and (row["strand"] == df.iloc[i-1]["strand"]):
+                minioperons[-1][0].append (row["product"])
+                minioperons[-1][1][1] = row["end"]
+        # if gene crosses zero, then GFF has two entries (first and last); genbank has one entry with 4 locations BTW
+        extra_space = 0
+        if ((minioperons[0][1][0] < 1) and  # gene crosses zero
+            (minioperons[-1][1][1] == genome_length-1) and # gene crosses and of genome
+            (minioperons[0][0][0] == minioperons[-1][0][-1]) and # same name for first and last gene
+            (minioperons[0][2] == minioperons[-1][2])): # and same orientation --> _same_ _gene_
+                # operon1 operon2 .... operonN-1 operonN --> operon2 .... operonN-1 operonN+operon1
+                extra_space = minioperons[0][1][1] # space beyond genome length used by first minioperon
+                minioperons[-1][1][1] = minioperons[0][1][1] + genome_length # new coordinate goes beyond genome length
+                minioperons[-1][0].extend (minioperons[0][0]) # add first minioperon gene names to last minioperon
+                minioperons.pop(0) # removes first minioperon which is now redundant with last minioperon
+        return minioperons, extra_space
 
+    def remove_short_operons (minioperons):
+        # remove minioperons that are too short
+        if (short_operon > 100): # remove short operons
+            minioperons = [m for m in minioperons if (m[1][1] - m[1][0]) > short_operon]
+        else: ## remove single-gene operons
+            minioperons = [m for m in minioperons if len(m[0]) > 1]
+        return minioperons
 
+    def dict_of_operons (minioperons, genome_sequence, extra_space=0):
+        operons = {}
+        if extra_space > 0: genome_sequence = genome_sequence + genome_sequence[:extra_space]
+        # minioperon is a list of [[gene1, ..., geneN], [start, end], strand]
+        for m in minioperons:
+            if (m[2] == "-"):
+                seq = genome_sequence[m[1][0]:m[1][1]+1].reverse_complement()
+                name = "".join (m[0][::-1]) # merge all gene names, like "L1L2L3"
+            else:
+                seq = genome_sequence[m[1][0]:m[1][1]+1]
+                name = "".join (m[0]) # merge all gene names, like "L1L2L3"
+            operons[name] = seq
+        return operons
 
-    
-        
+    # save all operon mosaics into same fasta file
+    mosaics = []
+    n_genomes = len(genome_list)
+    for i, g in enumerate(genome_list):
+        cdf = coord_df[coord_df["seqid"] == g]
+        mdf = merge_df[merge_df["seqid"] == g]
+        if len(cdf) < 2 or len(mdf) < 1: continue # some genomes, specially multi-chromosomal, have one gene 
+        # e.g. Burkholderia multivorans strain P1Bm2011b has 3 chromosomes
 
+        if i and i % (n_genomes//10) == 0: 
+            logger.info (f"{round((i*100)/n_genomes,1)}% of files processed, {len(mosaics)} mosaics found so far from thread {fname[-32:]}")
 
-
-
-
+        genome_sequence = read_fasta_as_list (os.path.join (fastadir, mdf["fasta_file"].iloc[0]))
+        genome_sequence = [x for x in genome_sequence if x.id == g] # one fasta file can have multiple genomes, each
+        genome_sequence = genome_sequence[0].seq # biopython SeqRecord object s.t. we can reverse_complement() if needed
+        operons = operon_from_coords (genome_sequence, cdf)
+        for opr,seq in operons.items():
+            name = f"> {g} {opr} " + mdf["fasta_description"].iloc[0]
+            fw.write (str(f"{name}\n{seq}\n").encode())
+            mosaics.append (opr)
+    fw.close()
+    return mosaics
