@@ -148,9 +148,9 @@ def calculate_stats_and_write_files (blast, output, df, taxon_df=None):
     ## add taxonomic information to raw blast results ##
     if taxon_df is not None: blast = blast.merge(taxon_df, on="sseqid", how="left")
     # difference between full primer and matched region
-    blast["len_match"] = blast["qseqid"].str.len() - blast["length"]
+    blast["len_match_diff"] = blast["qseqid"].str.len() - blast["length"]
 
-    ofname = output + ".raw.tsv"
+    ofname = output + ".raw.tsv.xz"
     blast.to_csv (ofname, sep="\t", index=False)
     logger.info(f"Wrote {len(blast)} raw BLAST hits to file {ofname}")
     df0 = stats_merge_blast_and_primers (blast, df)
@@ -166,7 +166,7 @@ def stats_merge_blast_and_primers (blast_df, primer_df):
     def summarise_blast_df (blast_df, suffix=""):
         df = blast_df.groupby("qseqid").agg({
             "sseqid":["count","nunique"], 
-            "len_match":[("mean", lambda x: round(np.mean(x),2))],
+            "len_match_diff":[("mean", lambda x: round(np.mean(x),2))],
             "evalue": [("mean", lambda x: round(np.mean(x),2))], # tuple = (name, function); must be in a list
             "bitscore":"max", 
             "qseq":longest_mode, 
@@ -191,7 +191,7 @@ def stats_merge_blast_and_primers (blast_df, primer_df):
             "qseqid":"primer", 
             "sseqid_count":"avge_hits" + suffix,
             "sseqid_nunique":"unique_hits" + suffix,
-            "len_match_mean":"avge_match_length" + suffix,
+            "len_match_diff_mean":"avge_match_diff" + suffix,
             "evalue_mean":"avge_evalue" + suffix,
             "bitscore_max":"max_bitscore" + suffix,
             "mismatch_mean":"avge_mismatches" + suffix,
@@ -213,7 +213,7 @@ def stats_merge_blast_and_primers (blast_df, primer_df):
     df = summarise_blast_df (blast_df, "_all")
 
     ## now on good matches only 
-    blast_df = blast_df[blast_df["len_match"] < 2] # almost perfect matches
+    blast_df = blast_df[blast_df["len_match_diff"] < 2] # almost perfect matches
     df2 = summarise_blast_df (blast_df, "")
     df = df.merge(df2, on="primer", how="left")
 

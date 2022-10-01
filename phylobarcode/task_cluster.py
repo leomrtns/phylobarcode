@@ -62,24 +62,54 @@ def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, id
     logger.info (f"Finished. Reduced sequence sets saved to files {ofile_centroid[0]} and {ofile_centroid[1]};")
     return
     
-def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, nthreads = 1):
+def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, subsample=100, nthreads = 1):
     if tsv is None: 
         logger.error("No tsv file provided")
         return
     if output is None:
         output = "clusters." + '%012x' % random.randrange(16**12) 
         logger.warning (f"No output file specified, writing to file {output}.tsv")
+    if subsample < 1e-7: subsample = 1e-7
+    if subsample > 100: subsample = 100
 
     df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
     #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
+    logger.info(f"Read {len(df)} primers from file {tsv}")
+    df = subsample_primers (df, subsample=subsample)
     primers = df["primer"].tolist()
-    logger.info(f"Read {len(primers)} primers from file {tsv}; will now calculate pairwise distances")
-    distmat = score_to_distance_matrix_fraction (create_NW_score_matrix(primers), mafft=True)
+    primers = [str(i) for i in primers]
+    score_mat = create_NW_score_matrix_parallel (primers, nthreads=nthreads)
+    logger.info(f"Pairwise distances calculated; will now cluster primers")
+    distmat = score_to_distance_matrix_fraction (score_mat, mafft=True)
     with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
         cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
     df["cluster"] = cl.labels_
     logger.info(f"Clustering done, writing to file {output}.tsv")
     df.to_csv (f"{output}.tsv", sep="\t", index=False)
+
+def subsample_primers (df, subsample=100):
+    if subsample > 100: return df
+    logger.info (f"Subsampling {len(df)} primers to {subsample:.2f}% of the original set over frequency, distance, and penalty (from primer3)")
+    subsample /= 100 # pandas percentile uses 0-1 scale
+    df["frequency"] = df["frequency"].astype(int)
+    df["max_distance"] = df["max_distance"].astype(int)
+    df["penalty"] = df["penalty"].astype(float)
+    threshold = {
+            "frequency": df["frequency"].quantile(1. - subsample), # quantile goes from min to max, thus we want 100-x% smallest value
+            "max_distance": df["max_distance"].quantile(subsample),
+            "penalty": df["penalty"].quantile(subsample)
+            }
+    if threshold["frequency"] > 1: # all primers have freq at least one thus all would be chosen  
+        df = df[(df["frequency"] >= threshold["frequency"]) | 
+                (df["max_distance"] < threshold["max_distance"]) |
+                (df["penalty"] < threshold["penalty"])]
+    else:
+        df = df[(df["frequency"] > threshold["frequency"]) | # OR large frequency OR freq=1 but small distance or penalty
+                ((df["max_distance"] < threshold["max_distance"]) &
+                 (df["penalty"] < threshold["penalty"]))]
+    logger.info (f"Subsampling done, {len(df)} primers kept using thresholds {threshold}")
+    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+    return df
 
 def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seqs don't need to be aligned, must be strings
     if use_parasail:
@@ -88,7 +118,7 @@ def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seq
         except ImportError: 
             logger.warning("Parasail module not installed, reverting to Bio.pairwise2 from Biopython")
             use_parasail = False
-
+    logger.info(f"Calculating pairwise alignment scores for {size} sequences using a single thread")
     size = len(seqlist)
     scoremat = np.zeros((size, size))
     if use_parasail is True and band_size == 0:
@@ -109,6 +139,57 @@ def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seq
         for i,j in itertools.combinations(range(size),2): 
             scoremat[i,j] = scoremat[j,i] = pairwise2.align.globalxx(seqlist[i], seqlist[j], score_only=True)
     return scoremat
+
+def create_NW_score_matrix_parallel (seqlist, use_parasail = True, band_size = 0, nthreads = 1): ## seqs don't need to be aligned, must be strings
+    """
+    Create a score matrix for a list of pairs of sequences, using the Needleman-Wunsch algorithm.
+    """
+    if nthreads == 1: return create_NW_score_matrix (seqlist, use_parasail, band_size)
+    from multiprocessing import Pool
+    from functools import partial
+    if use_parasail:
+        try:  
+            import parasail
+        except ImportError: 
+            logger.warning("Parasail module not installed, reverting to Bio.pairwise2 from Biopython")
+            use_parasail = False
+    size = len(seqlist)
+    logger.info(f"Calculating pairwise alignment scores for {size} sequences using {nthreads} threads")
+    pairs = list(itertools.combinations(range(size),2)) + [(i,i) for i in range(size)]
+    pairchunks = [pairs[i::nthreads] for i in range(nthreads)]
+
+    with Pool(len(pairchunks)) as p:
+        scorelist = p.map(
+            partial(nw_score_matrix_for_pairlist, seqlist=seqlist, use_parasail=use_parasail, band_size=band_size), 
+            pairchunks)
+    scorelist = [item for onethread in scorelist for item in onethread] ## flatten list of lists 
+    pairs = [item for onethread in pairchunks for item in onethread] ## flatten list of lists
+    scoremat = np.zeros((size, size))
+    for (i,j), d_ij in zip(pairs, scorelist):
+        scoremat[i,j] = scoremat[j,i] = d_ij
+    return scoremat
+
+def nw_score_matrix_for_pairlist (pairlist, seqlist, use_parasail, band_size):
+    scorelist = []
+    if use_parasail is True and band_size == 0:
+        import parasail
+        for i, j in pairlist:
+            d_ij = parasail.sg_striped_16(seqlist[i], seqlist[j], 9,1, parasail.blosum30).score
+            scorelist.append(d_ij)
+    elif use_parasail is True and isinstance(band_size, int): # banded: not semi-global but "full" NW, with simple penalty matrix
+        import parasail
+        mymat = parasail.matrix_create("ACGT", 2, -1)
+        for i, j in pairlist:
+            d_ij = parasail.nw_banded(seqlist[i], seqlist[j], 8, 1, band_size, mymat).score
+            scorelist.append(d_ij)
+    else:
+        for i, j in pairlist:
+            if i == j: 
+                d_ij = float(len(seqlist[i])) # diagonals have lengths (=best possible score!)
+            else:
+                d_ij = pairwise2.align.globalxx(seqlist[i], list[j], score_only=True)
+            scorelist.append(d_ij)
+    return scorelist
 
 def score_to_distance_matrix_fraction (scoremat, mafft = False):
     """
@@ -145,7 +226,7 @@ def find_centroids_from_file_vsearch (fastafile=None, output=None, identity=0.95
     pathlib.Path(tmpfile).unlink()
 
 # affinity propagation returns representatives, using similiarity matrix as input; birch needs features
-def find_representatives_from_sequences_optics (sequences=None, names=None, output=None, min_samples=2, nthreads=-1):
+def find_representatives_from_sequences_optics (sequences=None, names=None, output=None, min_samples=2, nthreads=1):
     if sequences is None:
         logger.error("No sequences provided to OPTICS")
         return
@@ -157,9 +238,9 @@ def find_representatives_from_sequences_optics (sequences=None, names=None, outp
     if (min_samples > len(sequences)//3): min_samples = len(sequences)//3
     if (min_samples < 2): min_samples = 2
 
-    logger.info(f"Calculating pairwise distances between {len(sequences)} sequences")
-    distmat = score_to_distance_matrix_fraction (create_NW_score_matrix(sequences), mafft=True)
-    logger.info(f"Calculating OPTICS")
+    score_matrix = create_NW_score_matrix_parallel (sequences, nthreads=nthreads)
+    distmat = score_to_distance_matrix_fraction (score_matrix, maftt=True)
+    logger.info(f"Finished calculating pairwise scores; will now calculate OPTICS clusterings")
     with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
         cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
 

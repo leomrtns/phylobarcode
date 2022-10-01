@@ -100,7 +100,7 @@ def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, ribonames):
 # second command: extract DNA sequences using pandas table with riboprotein info
 
 def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir=None, output=None, 
-        intergenic_space = 1000, short_operon = 1000, most_common_mosaics = 50, nthreads=1, scratch=None):
+        intergenic_space = 1000, short_operon = 1000, most_common_mosaics = 50, border = 50, nthreads=1, scratch=None):
     hash_name = '%012x' % random.randrange(16**12) 
     if coord_tsvfile is None:
         logger.error ("No TSV file with riboprot coordinates from GFF3 files given, exiting"); sys.exit(1)
@@ -125,6 +125,9 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
     if most_common_mosaics < 2:
         logger.warning (f"Most common mosaics {most_common_mosaics} is too small, setting to 2")
         most_common_mosaics = 2
+    if border < 1:
+        logger.warning (f"Border {border} is too small, setting to 1")
+        border = 1
 
     coord_df = pd.read_csv (coord_tsvfile, sep="\t", dtype = str)
     if coord_df.empty:
@@ -155,14 +158,16 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
                         extract_and_save_operons, 
                         fastadir=fastadir, 
                         intergenic_space=intergenic_space, 
-                        short_operon=short_operon), 
+                        short_operon=short_operon,
+                        border=border),
                     g_pool)
         results = [elem for x in results for elem in x] # flatten list of lists [[1,2],[3,4]] -> [1,2,3,4]
     else: ## single thread
         logger.info (f"Extracting operons from {len(genome_list)} genomes using one thread")
         logger.info (f"Thread is named arbitrarily")
         g_pool = [[coord_df, merge_df, f"{scratch}/coord.fa.gz"]] # list of lists to be compatible with multithreaded
-        results = extract_and_save_operons (g_pool[0], fastadir=fastadir, intergenic_space=intergenic_space, short_operon=short_operon)
+        results = extract_and_save_operons (g_pool[0], fastadir=fastadir, intergenic_space=intergenic_space,
+            short_operon=short_operon, border=border)
     
     # results is a list of mosaics, we'll save the most common ones
     moscounter = collections.Counter(results)
@@ -178,7 +183,7 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
     # delete scratch subdirectory and all its contents
     shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
 
-def save_mosaics_as_fasta (operon_seqs, output, mosaics): # FIXME: never matches
+def save_mosaics_as_fasta (operon_seqs, output, mosaics):
     for i, m in enumerate(mosaics):
         ofile = f"{output}.{m}.fasta.xz"
         counter = 0
@@ -193,7 +198,7 @@ def save_mosaics_as_fasta (operon_seqs, output, mosaics): # FIXME: never matches
         elif i == 6:
             logger.info (f"etc.")
 
-def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_operon=1000):
+def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_operon=1000, border=50):
     coord_df, merge_df, fname = pool_info
     genome_list = coord_df["seqid"].unique().tolist()
     fw = open_anyformat (fname, "w")
@@ -212,6 +217,7 @@ def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_
         genome_length = len(genome_sequence)
         minioperons, extra_space = minioperon_merge_from_coords (coord_df, genome_length)
         minioperons = remove_short_operons (minioperons)
+        minioperons = add_borders (minioperons, genome_length, border)
         return dict_of_operons (minioperons, genome_sequence, extra_space)
         
     def minioperon_merge_from_coords (df, genome_length=0):
@@ -242,6 +248,12 @@ def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_
             minioperons = [m for m in minioperons if (m[1][1] - m[1][0]) > short_operon]
         else: ## remove single-gene operons
             minioperons = [m for m in minioperons if len(m[0]) > 1]
+        return minioperons
+
+    def add_borders (minioperons, genome_length, border):
+        for m in minioperons:
+            m[1][0] = max (0, m[1][0] - border)
+            m[1][1] = min (genome_length-1, m[1][1] + border)
         return minioperons
 
     def dict_of_operons (minioperons, genome_sequence, extra_space=0):
