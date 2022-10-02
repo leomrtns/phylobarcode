@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json?
+from phylobarcode.pb_kmer import short_kmer
 import pandas as pd, numpy as np
 import itertools, pathlib, shutil, gzip
 from Bio import pairwise2
