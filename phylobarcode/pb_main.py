@@ -50,7 +50,7 @@ def run_extract_coordinates_from_gff (args):
     generate_prefix_for_task (args, "coordinates")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     task_extract_riboproteins.extract_coordinates_from_gff (tsvfile=args.tsv, gffdir = args.gff, output=args.prefix, 
-            jsonfile = defaults["json_ribonames"], nthreads=args.nthreads, scratch=args.scratch)
+            jsonfile = defaults["json_ribonames"], coord_tsvfile = args.coords, nthreads=args.nthreads, scratch=args.scratch)
 
 def run_extract_operons_from_fasta (args):
     from phylobarcode import task_extract_riboproteins
@@ -202,6 +202,7 @@ def main():
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('tsv', help="tsv file with file matches between fasta and GFF3 (required)")
     up_findp.add_argument('-g', '--gff',   metavar="<dir>", required=True, help="directory with GFF3 files (required)")
+    up_findp.add_argument('-c', '--coords', metavar="tsv", help="tsv file with coordinates from previous run (optional)")
     up_findp.set_defaults(func = run_extract_coordinates_from_gff)
 
     this_help = "Given riboprotein coordinates and table with fasta x GFF matches, extracts the riboprotein operons"

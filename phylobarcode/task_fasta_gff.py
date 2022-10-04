@@ -18,7 +18,7 @@ logger = logging.getLogger("phylobarcode_global_logger")
 
 # TODO:
 # 1. for instance Burkholderia multivorans strain P1Bm2011b has 3 chromosomes, we can extend GTDB info for all with same fasta file
-# 2. if plasmid has riboprot genes, we exclude them from merged fata+GFF but not from coordinates file (e.g. plasmid
+# 2. if plasmid has riboprot genes, we exclude them from merged fasta+GFF but not from coordinates file (e.g. plasmid
 #    NZ_CP007068.1 belonging to Rhizobium leguminosarum bv. trifolii CB782 - GCF_000520875.1.fna.gz)
 # 3. deduplicate (sourmash or genus information)
 
@@ -200,9 +200,9 @@ def read_gtdb_taxonomy_and_merge (gtdb_file, df):
 
     gtdb_columns_rename = {'accession': 'gtdb_accession', 'ssu_query_id': 'seqid'}
     df_gtdb.rename(columns=gtdb_columns_rename, inplace=True) # rename columns to match other tables
- 
-    df_gtdb = pd.merge(df, df_gtdb, on='seqid', how='left')
-
+    map_df = df[["seqid", "fasta_file"]].drop_duplicates() # map seqid to fasta s.t. all seqids from fasta receive GTDB info 
+    df_gtdb = pd.merge(df_gtdb, map_df, on='seqid', how='inner').drop(columns=['seqid']) # fasta_file column will be key
+    df_gtdb = pd.merge(df, df_gtdb, on='fasta_file', how='left') # merge GTDB info with fasta+gff info
     return df_gtdb
 
 def generate_thread_chunks (files, nthreads):

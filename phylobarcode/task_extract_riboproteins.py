@@ -13,7 +13,7 @@ logger = logging.getLogger("phylobarcode_global_logger")
 # TODO: extra genes (rpoB, rpoC) are also close to riboproteins
 # first command: generate pandas table with info from all GFF3 files
 
-def extract_coordinates_from_gff (tsvfile=None, gffdir=None, output=None, jsonfile=None, nthreads=1, scratch=None):
+def extract_coordinates_from_gff (tsvfile=None, gffdir=None, output=None, jsonfile=None, coord_tsvfile = None, nthreads=1, scratch=None):
     hash_name = '%012x' % random.randrange(16**12) 
     if tsvfile is None:
         logger.error ("No TSV file with matches between fasta and GFF3 files given, exiting"); sys.exit(1)
@@ -28,24 +28,52 @@ def extract_coordinates_from_gff (tsvfile=None, gffdir=None, output=None, jsonfi
         jsonfile = os.path.join( os.path.dirname(os.path.abspath(__file__)), "data/riboprotein_names.json")
     if scratch is None: ## this should not happen if function called from main script; use current directory 
         scratch = f"scratch.{hash_name}"
-    # create scratch directory (usually it's a subdirectory of the user-given scratch directory)
-    pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
 
     df = pd.read_csv (tsvfile, sep="\t", dtype=str)
     # currently we work only with genomes included in GTDB (i.e. QC passed)
     df.dropna(subset=["gtdb_accession"], inplace=True) # same as df = df[~df["gtdb_accession"].isnull()]
+    n_files = len(df["gff_file"].unique())
+    logger.info (f"Found {len(df)} genomes from {n_files} GFF3 files and GTDB taxonomic info from file {tsvfile}")
     try:
         ribonames = json.load(open(jsonfile, "r"))
     except ValueError as e:
-        logger.error(f"Error loading riboprotein names from {jsonfile}: {e}")
+        logger.error(f"Error loading riboprotein (product) names from {jsonfile}: {e}")
         logger.error("Coordinates will be extracted but gene names will not be corrected; some operons will be skipped downstream")
         ribonames = None
+
+    ribogenes_jsonfile = os.path.join( os.path.dirname(os.path.abspath(__file__)), "data/ribogenes_names.json")
+    try:
+        ribogenes = json.load(open(ribogenes_jsonfile, "r"))
+    except ValueError as e:
+        logger.error(f"Error loading riboprotein (genes) names from {ribogenes_jsonfile}: {e}")
+        logger.error("Coordinates will be extracted but gene names will not be corrected; some operons will be skipped downstream")
+        ribogenes = None
+
+    if coord_tsvfile is not None:
+        coord_df = pd.read_csv (coord_tsvfile, sep="\t", dtype=str)
+        existing_seqids = coord_df["seqid"].unique()
+        existing_gff_files = df.loc[df["seqid"].isin(existing_seqids), "gff_file"].unique() # files with already extracted coordinates
+        df = df[~df["gff_file"].isin(existing_gff_files)]
+        logger.info (f"It is assumed that coordinates from all genomes (seqid) from each file in coordinate table"
+                f"{coord_tsvfile} have been extracted.\n If this is not the case, please run the command again without"
+                f"the --coord_tsvfile option (if, for instance, a GFF3 or a fasta file was updated).")
+        if len(df) == 0:
+            logger.info(f"File {coord_tsvfile} has info about all {len(existing_seqids)} genomes")
+            return 
+        else:
+            logger.info (f"File {coord_tsvfile} has info about {len(existing_seqids)} genomes; "
+                f"{len(df)} genomes left to process from file {tsvfile}")
+
+    # create scratch directory (usually it's a subdirectory of the user-given scratch directory)
+    pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # python 3.5+ create dir if it doesn't exist
 
     gfiles = []
     for gf in df["gff_file"].unique():
         fullgf = os.path.join (gffdir, gf)
         if os.path.isfile (fullgf): gfiles.append (gf)
         else: logger.error (f"GFF file {fullgf} does not exist, skipping")
+    if n_files < 1: 
+        logger.error ("No GFF3 files available, exiting"); sys.exit(1)
 
     if (nthreads > 1): # main() already checked that modules are available (o.w. nthreads=1)
         logger.info (f"Extracting ribosomal proteins from {len(gfiles)} GFF3 files using up to {nthreads} threads")
@@ -57,13 +85,15 @@ def extract_coordinates_from_gff (tsvfile=None, gffdir=None, output=None, jsonfi
         chunk_size = n_files // nthreads + 1 
         gfile_chunks = [gfiles[i:i+chunk_size] for i in range(0, n_files, chunk_size)]
         with Pool (len(gfile_chunks)) as p:
-            results = p.map (partial(get_features_from_gff, gff_dir=gffdir, scratch_dir=scratch, ribonames=ribonames), gfile_chunks)
+            results = p.map (partial(
+                get_features_from_gff, gff_dir=gffdir, scratch_dir=scratch, ribonames=ribonames,ribogenes=ribogenes), 
+                gfile_chunks)
         tbl = [row for chunk in results if chunk is not None for row in chunk] # [[[1,2],[4,5]], [[7,8],[10,11]]] -> [[1,2],[4,5],[7,8],[10,11]]
 
     else: ## one thread
         logger.info (f"Extracting ribosomal proteins from {len(gfiles)} GFF3 files using a single thread")
         logger.info (f"Thread is named after first file in pool (i.e. name is arbitrary and does not relate to file itself)")
-        tbl = get_features_from_gff (gff_file = gf, gff_dir = gffdir, scratch_dir = scratch, ribonames = ribonames)
+        tbl = get_features_from_gff (gff_file = gf, gff_dir = gffdir, scratch_dir = scratch, ribonames = ribonames, ribogenes = ribogenes)
 
     logger.info (f"Extracted information about {len(tbl)} ribosomal proteins")
     
@@ -77,7 +107,7 @@ def extract_coordinates_from_gff (tsvfile=None, gffdir=None, output=None, jsonfi
     # delete scratch subdirectory and all its contents
     shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
 
-def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, ribonames):
+def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, ribonames, ribogenes):
     database = os.path.join (scratch_dir, os.path.basename(gff_file_list[0]) + ".db") ## unique name for the database, below scratch dir
     a = []
     n_files = len (gff_file_list)
@@ -87,12 +117,17 @@ def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, ribonames):
         gff_file = os.path.join (gff_dir, gf) ## full path to GFF3 file
         db = gffutils.create_db(gff_file, dbfn=database, force=True, keep_order=False, merge_strategy="merge", sort_attribute_values=False)
         for i in db.features_of_type('CDS'):
+            gene = i.attributes["gene"][0] if "gene" in i.attributes else None
             if any ("ribosomal protein" in str.lower(x) for x in i.attributes["product"]):
                 prod = str.upper(i.attributes["product"][0])
                 prod = prod[prod.find('RIBOSOMAL PROTEIN')+17:].lstrip() # remove "ribosomal protein" from beginning; find() returns -1 if not found or idx of first match
+            
                 if ribonames and prod in ribonames.keys():  # to inspect all possible names, remove this if statement and store all `prod`
                     prod = ribonames[prod] # replace with standard name
                     a.append ([i.seqid, i.start, i.end, i.strand, prod]) # gff_file doesnt know which seq from fasta file, seqid does
+            elif ribogenes and gene and gene in ribogenes.keys(): ## not RIBOSOMAL PROTEIN, but still in list of ribosomal genes
+                gene = ribogenes[gene]
+                a.append ([i.seqid, i.start, i.end, i.strand, gene]) # gff_file doesnt know which seq from fasta file, seqid does
 
     #pathlib.Path(database).unlink() # delete database file (delete whole tree later)
     return a
@@ -137,7 +172,6 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
         logger.error (f"Merged file {merge_tsvfile} with fasta x GFF3 info is empty, exiting"); sys.exit(1)
 
     genome_list = coord_df["seqid"].unique().tolist()
-    genome_list = genome_list[::10] # for testing, only use every 10th genome
     # create scratch subdirectory
     pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # create scratch subdirectory
 
