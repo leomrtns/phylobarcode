@@ -223,7 +223,6 @@ def save_mosaics_as_fasta (operon_seqs, output, mosaics):
         counter = 0
         with open_anyformat (ofile, "w") as f:
             for rec in operon_seqs:
-                print (rec.description.split())
                 if rec.description.split()[1] == m: # header has format "> genomeID mosaic description"
                     f.write (str(f"> {rec.description}\n{rec.seq}\n").encode())
                     counter += 1
