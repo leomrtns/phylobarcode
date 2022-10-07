@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json?
-from phylobarcode.pb_kmer import short_kmer
+from phylobarcode.pb_kmer import * 
 import pandas as pd, numpy as np
 import itertools, pathlib, shutil, gzip
 from Bio import pairwise2
@@ -70,12 +70,19 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, subsam
     if output is None:
         output = "clusters." + '%012x' % random.randrange(16**12) 
         logger.warning (f"No output file specified, writing to file {output}.tsv")
-    if subsample < 1e-7: subsample = 1e-7
+    if subsample < 1e-5: subsample = 1e-5
     if subsample > 100: subsample = 100
 
     df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
     #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
     logger.info(f"Read {len(df)} primers from file {tsv}")
+    
+    df = kmer_clustering_dataframe (df) 
+    logger.info(f"Clustering done, writing to file {output}.tsv")
+    df.to_csv (f"{output}.tsv", sep="\t", index=False)
+    return
+    
+
     df = subsample_primers (df, subsample=subsample)
     primers = df["primer"].tolist()
     primers = [str(i) for i in primers]
@@ -124,16 +131,16 @@ def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seq
     scoremat = np.zeros((size, size))
     if use_parasail is True and band_size == 0:
         for i in range(size): 
-            scoremat[i,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[i]), 9,1, parasail.blosum30).score # nw (sg doenst penalise begin and end )
+            scoremat[i,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[i]), 10,1, parasail.blosum30).score # nw (sg doenst penalise begin and end )
         for i,j in itertools.combinations(range(size),2): #parasail._stats_ also gives x.length, x.score
             #scoremat[i,j] = scoremat[j,i] = parasail.nw_stats_striped_16(str(seqlist[i]), str(seqlist[j]), 11,1, parasail.blosum30).matches
-            scoremat[i,j] = scoremat[j,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[j]), 9,1, parasail.blosum30).score
+            scoremat[i,j] = scoremat[j,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[j]), 10,1, parasail.blosum30).score
     elif use_parasail is True and isinstance(band_size, int): # banded: not semi-global but "full" NW, with simple penalty matrix
         mymat = parasail.matrix_create("ACGT", 2, -1)
         for i in range(size):
-            scoremat[i,i] = parasail.nw_banded(str(seqlist[i]), str(seqlist[i]), 8, 1, band_size, mymat).score # global Needleman-Wunsch 
+            scoremat[i,i] = parasail.nw_banded(str(seqlist[i]), str(seqlist[i]), 10, 1, band_size, mymat).score # global Needleman-Wunsch 
         for i,j in itertools.combinations(range(size),2): #parasail._stats_ also gives x.length, x.score
-            scoremat[i,j] = scoremat[j,i] = parasail.nw_banded(str(seqlist[i]), str(seqlist[j]), 8, 1, band_size, mymat).score
+            scoremat[i,j] = scoremat[j,i] = parasail.nw_banded(str(seqlist[i]), str(seqlist[j]), 10, 1, band_size, mymat).score
     else:
         for i in range(size): 
             scoremat[i,i] = float(len(seqlist[i]))  # diagonals have sequence lengths (=best possible score!)
@@ -258,4 +265,35 @@ def find_representatives_from_sequences_optics (sequences=None, names=None, outp
         for i in idx:
             f.write(str(f">{names[i]}\n{sequences[i]}\n").encode())
     logger.info(f"Wrote {len(idx)} representatives to file {output}")
+
+## testing algos
+
+def kmer_clustering_dataframe (df):
+    primers = df["primer"].tolist()
+    df["frequency"] = df["frequency"].astype(int)
+    df["max_distance"] = df["max_distance"].astype(int)
+    df["penalty"] = df["penalty"].astype(float)
+    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+
+    primers = [str(i) for i in primers]
+    kmers = [short_kmer(i,length = [8]) for i in primers]
+    logger.debug (f"Number of kmers: {len(kmers)}")
+    cluster_1 = cluster_short_kmers_by_similarity (kmers, threshold=0.999, element="min")
+    n_clusters = len(set(cluster_1))
+    logger.debug (f"Number of clusters: {n_clusters}")
+    if n_clusters < len(primers)/100:
+        cluster_2 = cluster_short_kmers_by_overlap (kmers, threshold=0.999, element="max")
+        n_clusters = len(set(cluster_2))
+        logger.debug (f"Number of overlap clusters: {n_clusters} for too few clusters")
+        cluster_1 = consensus_clustering (cluster_1, cluster_2) # oversplits clusters
+        n_clusters = len(set(cluster_1))
+        logger.debug (f"Number of consensus clusters: {n_clusters}")
+    elif n_clusters > len(primers)/2:
+        cluster_1 = cluster_short_kmers_by_overlap (kmers, threshold=0.9, element="min")
+        n_clusters = len(set(cluster_1))
+        logger.debug (f"Number of overlap clusters: {n_clusters} for too many clusters")
+    
+    df["kmer_cluster"] = cluster_1
+    df = df.groupby("kmer_cluster").head(5)
+    return df
 

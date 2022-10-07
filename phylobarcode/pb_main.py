@@ -311,7 +311,9 @@ def main():
     up_findp.set_defaults(func = run_blast_primers)
 
     args = main_parser.parse_args()
-    logging.basicConfig(level=args.loglevel)
+    logger.setLevel(args.loglevel)
+    for handler in logger.handlers: handler.setLevel(args.loglevel)
+
 
     if args.outdir: 
         defaults["current_dir"] = args.outdir = os.path.join(defaults["current_dir"], args.outdir)
