@@ -275,20 +275,20 @@ def kmer_clustering_dataframe (df):
     df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
 
     primers = [str(i) for i in primers]
-    kmers = [short_kmer(i,length = [8]) for i in primers]
+    kmers = [short_kmer(i,length = [4,7]) for i in primers]
     logger.debug (f"Number of kmers: {len(kmers)}")
-    cluster_1 = cluster_short_kmers_by_similarity (kmers, threshold=0.999, element="min")
+    cluster_1 = cluster_short_kmers (kmers, threshold=0.75, element="min", use_centroid=False, jaccard=True)
     n_clusters = len(set(cluster_1))
     logger.debug (f"Number of clusters: {n_clusters}")
     if n_clusters < len(primers)/100:
-        cluster_2 = cluster_short_kmers_by_overlap (kmers, threshold=0.999, element="max")
-        n_clusters = len(set(cluster_2))
-        logger.debug (f"Number of overlap clusters: {n_clusters} for too few clusters")
+        cluster_2 = cluster_short_kmers (kmers, threshold=0.9, element="max", use_centroid=False, jaccard=False)
+        n_clusters2 = len(set(cluster_2))
+        logger.debug (f"Number of overlap clusters: {n_clusters2} for too few clusters")
         cluster_1 = consensus_clustering (cluster_1, cluster_2) # oversplits clusters
-        n_clusters = len(set(cluster_1))
-        logger.debug (f"Number of consensus clusters: {n_clusters}")
+        n_clusters2 = len(set(cluster_1))
+        logger.debug (f"Number of consensus clusters: {n_clusters2}")
     elif n_clusters > len(primers)/2:
-        cluster_1 = cluster_short_kmers_by_overlap (kmers, threshold=0.9, element="min")
+        cluster_1 = cluster_short_kmers (kmers, threshold=0.6, use_centroid=True, element="min", jaccard=False)
         n_clusters = len(set(cluster_1))
         logger.debug (f"Number of overlap clusters: {n_clusters} for too many clusters")
     

@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json?
+import copy
 
 logger = logging.getLogger("phylobarcode_global_logger")
 
@@ -34,6 +35,12 @@ class short_kmer:
         if length not in self.kmers.keys(): self.set_kmers (length)
         return self.kmers[length]
 
+    def append (self, other): 
+        if len(other.seq) > len(self.seq): self.seq = other.seq
+        for k,v in other.kmers.items():
+            if k in self.kmers.keys(): self.kmers[k].update(v)
+            else: self.kmers[k] = v
+
     def get_seq (self): return str(self.seq)
     def get_k (self): return list(self.kmers.keys())
 
@@ -52,7 +59,7 @@ class short_kmer:
         ove = [len(self.get_kmers(l).intersection(other.get_kmers(l))) / min(len(self.get_kmers(l)), len(other.get_kmers(l))) for l in length]
         return min(ove), sum(ove)/len(ove), max(ove)
 
-def cluster_short_kmers_by_similarity (sequences, length=None, threshold=0.5, element="min"):
+def cluster_short_kmers (sequences, length=None, threshold=0.5, element="min", use_centroid=True, jaccard=True):
     if not isinstance (sequences, list): sequences = [sequences]
     if length is None:
         if isinstance (sequences[0], short_kmer):length = sequences[0].get_k() 
@@ -64,34 +71,22 @@ def cluster_short_kmers_by_similarity (sequences, length=None, threshold=0.5, el
     elif (element == "max"): element = 2
     else: element = 1
     clusters = []
+    centroids = []
     for i in range(len(kmers)):
-        for c in clusters:
-            if kmers[i].jaccard_similarity(kmers[c[0]])[element] > threshold:
-                c.append(i)
+        for cl, ce in zip(clusters, centroids):
+            if (jaccard):
+                if use_centroid: similarity = kmers[i].jaccard_similarity(ce)[element]
+                else:            similarity = kmers[i].jaccard_similarity(kmers[cl[0]])[element]
+            else:
+                if use_centroid: similarity = kmers[i].set_overlap(ce)[element]
+                else:            similarity = kmers[i].set_overlap(kmers[cl[0]])[element]
+            if similarity > threshold:
+                cl.append(i)
+                ce.append(kmers[i]) 
                 break
-        else: clusters.append([i])
-    idx = [None] * len(kmers)
-    for i, c in enumerate(clusters):
-        for j in c: idx[j] = i
-    return idx
-
-def cluster_short_kmers_by_overlap (sequences, length=None, threshold=0.5, element="min"):
-    if isinstance(length, int): length = [length]
-    if not isinstance (sequences, list): sequences = [sequences]
-    if length is None:
-        if isinstance (sequences[0], short_kmer):length = sequences[0].get_k() 
-        else: length = [5] 
-    kmers = [short_kmer(seq, length) if isinstance(seq, str) else seq for seq in sequences]
-    if (element == "min"): element = 0
-    elif (element == "max"): element = 2
-    else: element = 1
-    clusters = []
-    for i in range(len(kmers)):
-        for c in clusters:
-            if kmers[i].set_overlap(kmers[c[0]])[element] > threshold:
-                c.append(i)
-                break
-        else: clusters.append([i])
+        else: 
+            clusters.append([i])
+            centroids.append(copy.deepcopy(kmers[i])) 
     idx = [None] * len(kmers)
     for i, c in enumerate(clusters):
         for j in c: idx[j] = i
