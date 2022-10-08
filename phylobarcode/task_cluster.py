@@ -80,8 +80,7 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, subsam
     df = kmer_clustering_dataframe (df) 
     logger.info(f"Clustering done, writing to file {output}.tsv")
     df.to_csv (f"{output}.tsv", sep="\t", index=False)
-    return
-    
+    sys.exit(0) 
 
     df = subsample_primers (df, subsample=subsample)
     primers = df["primer"].tolist()
@@ -296,4 +295,3 @@ def kmer_clustering_dataframe (df):
     df["kmer_cluster"] = cluster_1
     df = df.groupby("kmer_cluster").head(5)
     return df
-
