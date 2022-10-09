@@ -71,14 +71,35 @@ def cluster_single_kmers (sequences, length=None, threshold=0.5, use_centroid=Tr
         else: 
             clusters.append([i])
             centroids.append(single_kmer(kmers[i])) #list.append()
-    idx = [None] * len(kmers)
+
+    idx = map_clusters_to_indices(clusters, n_elements=len(kmers))
+    return idx, clusters, centroids
+
+def cluster_centroids (centroids, clusters, cent_2, clu_2, threshold=0.5, jaccard=True):
+    if jaccard is True: element = 0 ## which element from `similarity` to use
+    else:               element = 1
+    if len(cent_2) != len(clu_2):
+        logger.error("Length of centroids and clusters do not match")
+        return
+    for i in range(len(cent_2)):
+        for cl,ce in zip(clusters, centroids):
+            if ce.similarity(cent_2[i])[element] > threshold:
+                cl.extend(clu_2[i]) # each element of cluster[] is a list (of indices to original sequences)
+                ce.append(cent_2[i])
+                break
+        else:
+            clusters.append(clu_2[i])
+            centroids.append(single_kmer(cent_2[i]))
+    return clusters, centroids
+
+# TODO: use cluster_centroids() to run in parallel
+
+def map_clusters_to_indices (clusters, n_elements = None):
+    if n_elements is None: n_elements = max([max(c) for c in clusters]) + 1 
+    idx = [None] * n_elements
     for i, c in enumerate(clusters):
         for j in c: idx[j] = i
     return idx
-
-#def cluster_centroids (centroids1, centroids2, idx1, idx2, threshold=0.5, jaccard=True):
-#    if jaccard is True: element = 0 ## which element from `similarity` to use
-#    else:               element = 1
 
 def consensus_clustering (cluster_1, cluster_2):
     clusters = [] 

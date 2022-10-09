@@ -282,8 +282,8 @@ def main():
     up_findp.add_argument('tsv', nargs="+", help="tsv files with primers (each ouput file from 'find_primers')")
     up_findp.add_argument('-s', '--subsample', metavar='float', type=float, default=100,
             help="subsample percentage of best primers to be clustered (default=100, i.e. all primers)")
-    up_findp.add_argument('-m', '--min_samples', type=int, default=5, 
-            help="in OPTICS, minimum number of neighbours for sequence to be a core point (default=5 ; should be larger than 2)")
+    up_findp.add_argument('-m', '--min_samples', type=int, default=3, 
+            help="in OPTICS, minimum number of neighbours for sequence to be a core point (default=3; should be larger than 2)")
     up_findp.set_defaults(func = run_cluster_primers)
 
     this_help = "Blast primers against database, checking for left-right pairs."
