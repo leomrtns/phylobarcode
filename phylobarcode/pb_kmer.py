@@ -4,93 +4,81 @@ import copy
 
 logger = logging.getLogger("phylobarcode_global_logger")
 
-class short_kmer:
-    kmers = {}
+class single_kmer:
+    kmers = set()
     seq = None 
-    def __init__(self, seq=None, length=None):
-        self.seq = str(seq)
-        self.kmers = {}
-        if length is None: length = [4]
-        if isinstance(length, int):
-            length = [length]
-        for l in length:
-            self.set_kmers (l)
+    k = None
+    size = 0
+    def __init__(self, seq=None, k=None):
+        if isinstance(seq, str): 
+            self.seq = str(seq)
+            self.kmers = set()
+            if k is None: self.k = 4
+            else:         self.k = k
+            self.set_kmers()
+            self.size = len(self.kmers)
+        elif isinstance(seq, single_kmer):
+            self.seq = copy.deepcopy(seq.seq)
+            self.kmers = copy.deepcopy(seq.kmers)
+            self.k = seq.k
+            self.size = seq.size
 
-    def set_kmers (self, length=None):
-        if length is None: length = 4
-        if length < 2: 
-            self.kmers[length] = 1
-            return
+    def set_kmers (self):
         kmer_list = []
-        for i in range(len(self.seq)-length+1):
-            kmer_list.append ( xxhash.xxh64_intdigest(self.seq[i:i+length]) )
-#            print ("dbg0: ", self.seq[i:i+length], " :: ", xxhash.xxh64_intdigest(self.seq[i:i+length]))
-        self.kmers[length] = set (kmer_list)
-#        print (sorted(self.kmers[length]), "dbg1: ", length)
+        for i in range(len(self.seq)-self.k + 1):
+            kmer_list.append ( xxhash.xxh64_intdigest(self.seq[i:i+self.k]) )
+        self.kmers = set (kmer_list)
         return
 
-    def get_kmers (self, length=None):
-        if length is None: length = 4
-#        print ("dbg2: ", self.kmers.keys(), "requested length: ", length, " :: ", self.seq, " :: ", sorted(self.kmers[length]))
-        if length not in self.kmers.keys(): self.set_kmers (length)
-        return self.kmers[length]
+    def get_kmers (self): return self.kmers
+
+    def get_seq (self): return self.seq
+
+    def get_k (self): return self.k 
+
+    def get_size (self): return self.size
 
     def append (self, other): 
-        if len(other.seq) > len(self.seq): self.seq = other.seq
-        for k,v in other.kmers.items():
-            if k in self.kmers.keys(): self.kmers[k].update(v)
-            else: self.kmers[k] = v
+        if len(self.seq) > len(other.get_seq()): 
+            self.seq = other.get_seq()
+        self.kmers.update(other.get_kmers())
+        self.size = len(self.kmers)
 
-    def get_seq (self): return str(self.seq)
-    def get_k (self): return list(self.kmers.keys())
+    def similarity (self, other):  # Jaccard similarity, overlap coefficient (aka Szymkiewicz–Simpson coefficient)
+        intrsc = len(self.get_kmers().intersection(other.get_kmers()))
+        unin   = len(self.get_kmers().union(other.get_kmers()))
+        minsize = min(self.get_size(), other.get_size())
+        return intrsc/unin, intrsc/minsize
 
-    def jaccard_similarity (self, other, length = None):
-        if length is None: length = sorted(set(self.get_k() + other.get_k())) # sorted() returns a list
-        if isinstance(length, int): length = [length]
-        jac = [len(self.get_kmers(l).intersection(other.get_kmers(l))) / len(self.get_kmers(l).union(other.get_kmers(l))) for l in length]
-#        print ("dbg3: ", self.get_seq(), " - ", other.get_seq(), " :")
-#        for i,l in enumerate(length):
-#            print ("\t", l, " [", jac[i], "]\n", sorted(self.get_kmers(l)), "\n", sorted(other.get_kmers(l)))
-        return min(jac), sum(jac)/len(jac), max(jac)
-
-    def set_overlap (self, other, length = None): # aka overlap coefficient or Szymkiewicz–Simpson coefficient
-        if length is None: length = sorted(set(self.get_k() + other.get_k())) # sorted() returns a list
-        if isinstance(length, int): length = [length]
-        ove = [len(self.get_kmers(l).intersection(other.get_kmers(l))) / min(len(self.get_kmers(l)), len(other.get_kmers(l))) for l in length]
-        return min(ove), sum(ove)/len(ove), max(ove)
-
-def cluster_short_kmers (sequences, length=None, threshold=0.5, element="min", use_centroid=True, jaccard=True):
+def cluster_single_kmers (sequences, length=None, threshold=0.5, use_centroid=True, jaccard=True):
     if not isinstance (sequences, list): sequences = [sequences]
     if length is None:
-        if isinstance (sequences[0], short_kmer):length = sequences[0].get_k() 
-        else: length = [5] 
-    if isinstance(length, int): length = [length]
-    kmers = [short_kmer(seq, length) if isinstance(seq, str) else seq for seq in sequences]
-#    for kmer in kmers: print (sorted(kmer.get_kmers(length[0])), "==" , kmer.get_seq(), length[0], " dbg4")
-    if (element == "min"): element = 0
-    elif (element == "max"): element = 2
-    else: element = 1
+        if isinstance (sequences[0], single_kmer):length = sequences[0].get_k() 
+        else: length = 5 
+    kmers = [single_kmer(seq, k=length) if isinstance(seq, str) else seq for seq in sequences]
+    if jaccard is True: element = 0 ## which element from `similarity` to use
+    else:               element = 1
     clusters = []
     centroids = []
     for i in range(len(kmers)):
         for cl, ce in zip(clusters, centroids):
-            if (jaccard):
-                if use_centroid: similarity = kmers[i].jaccard_similarity(ce)[element]
-                else:            similarity = kmers[i].jaccard_similarity(kmers[cl[0]])[element]
-            else:
-                if use_centroid: similarity = kmers[i].set_overlap(ce)[element]
-                else:            similarity = kmers[i].set_overlap(kmers[cl[0]])[element]
-            if similarity > threshold:
+            if use_centroid: similarity = kmers[i].similarity(ce)
+            else:            similarity = kmers[i].similarity(kmers[cl[0]])
+            if similarity[element] > threshold:
                 cl.append(i)
-                ce.append(kmers[i]) 
+                ce.append(kmers[i]) #single_kmer.append() 
                 break
         else: 
             clusters.append([i])
-            centroids.append(copy.deepcopy(kmers[i])) 
+            centroids.append(single_kmer(kmers[i])) #list.append()
     idx = [None] * len(kmers)
     for i, c in enumerate(clusters):
         for j in c: idx[j] = i
     return idx
+
+#def cluster_centroids (centroids1, centroids2, idx1, idx2, threshold=0.5, jaccard=True):
+#    if jaccard is True: element = 0 ## which element from `similarity` to use
+#    else:               element = 1
 
 def consensus_clustering (cluster_1, cluster_2):
     clusters = [] 

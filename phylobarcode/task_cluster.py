@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json?
 from phylobarcode.pb_kmer import * 
+#from phylobarcode.pb_short_kmer import * 
 import pandas as pd, numpy as np
 import itertools, pathlib, shutil, gzip
 from Bio import pairwise2
@@ -80,7 +81,6 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, subsam
     df = kmer_clustering_dataframe (df) 
     logger.info(f"Clustering done, writing to file {output}.tsv")
     df.to_csv (f"{output}.tsv", sep="\t", index=False)
-    sys.exit(0) 
 
     df = subsample_primers (df, subsample=subsample)
     primers = df["primer"].tolist()
@@ -268,6 +268,35 @@ def find_representatives_from_sequences_optics (sequences=None, names=None, outp
 ## testing algos
 
 def kmer_clustering_dataframe (df):
+    primers = df["primer"].tolist()
+    df["frequency"] = df["frequency"].astype(int)
+    df["max_distance"] = df["max_distance"].astype(int)
+    df["penalty"] = df["penalty"].astype(float)
+    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+
+    primers = [str(i) for i in primers]
+    kmers = [single_kmer(i,k = 5) for i in primers]
+    logger.debug (f"Number of kmers: {len(kmers)}")
+    cluster_1 = cluster_single_kmers (kmers, threshold=0.75, use_centroid=False, jaccard=True)
+    n_clusters = len(set(cluster_1))
+    logger.debug (f"Number of clusters: {n_clusters}")
+    if n_clusters < len(primers)/100:
+        cluster_2 = cluster_single_kmers (kmers, threshold=0.9, use_centroid=False, jaccard=False)
+        n_clusters2 = len(set(cluster_2))
+        logger.debug (f"Number of overlap clusters: {n_clusters2} for too few clusters")
+        cluster_1 = consensus_clustering (cluster_1, cluster_2) # oversplits clusters
+        n_clusters2 = len(set(cluster_1))
+        logger.debug (f"Number of consensus clusters: {n_clusters2}")
+    elif n_clusters > len(primers)/2:
+        cluster_1 = cluster_single_kmers (kmers, threshold=0.5, use_centroid=True, jaccard=False)
+        n_clusters = len(set(cluster_1))
+        logger.debug (f"Number of overlap clusters: {n_clusters} for too many clusters")
+    
+    df["kmer_cluster"] = cluster_1
+    df = df.groupby("kmer_cluster").head(5)
+    return df
+
+def kmer_clustering_dataframe_old (df):
     primers = df["primer"].tolist()
     df["frequency"] = df["frequency"].astype(int)
     df["max_distance"] = df["max_distance"].astype(int)
