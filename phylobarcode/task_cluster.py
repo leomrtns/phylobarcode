@@ -64,25 +64,33 @@ def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, id
     logger.info (f"Finished. Reduced sequence sets saved to files {ofile_centroid[0]} and {ofile_centroid[1]};")
     return
     
-def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, subsample=100, nthreads = 1):
+def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, subsample=100, kmer_length = None, 
+        threshold = None, n_best = None, nthreads = 1):
     if tsv is None: 
         logger.error("No tsv file provided")
         return
     if output is None:
         output = "clusters." + '%012x' % random.randrange(16**12) 
-        logger.warning (f"No output file specified, writing to file {output}.tsv")
+        logger.warning (f"No output file specified, writing to file {output}.tsv.xz")
     if subsample < 1e-5: subsample = 1e-5
     if subsample > 100: subsample = 100
+    if kmer_length is None: kmer_length = 5
+    if threshold is None: threshold = 0.7
+    if n_best is None: n_best = 10
 
     df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
-    #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
     logger.info(f"Read {len(df)} primers from file {tsv}")
     
-    df = kmer_clustering_dataframe (df) 
-    logger.info(f"Clustering done, writing to file {output}.tsv")
-    df.to_csv (f"{output}.tsv", sep="\t", index=False)
-
     df = subsample_primers (df, subsample=subsample)
+
+    df = kmer_clustering_dataframe (df, kmer_length = kmer_length, threshold = threshold, n_best = n_best, nthreads=nthreads)
+    logger.info(f"Clustering done, writing to file {output}.tsv.xz")
+    df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
+#    df = batch_cluster_primers (df, min_samples=min_samples, nthreads=nthreads)
+    return
+
+def batch_cluster_primers (df, min_samples = 2, nthreads = 1):
+#    for df1 in  ## STOPHERE
     primers = df["primer"].tolist()
     primers = [str(i) for i in primers]
     score_mat = create_NW_score_matrix_parallel (primers, nthreads=nthreads)
@@ -91,11 +99,36 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, subsam
     with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
         cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
     df["cluster"] = cl.labels_
-    logger.info(f"Clustering done, writing to file {output}.tsv")
-    df.to_csv (f"{output}.tsv", sep="\t", index=False)
+    logger.info(f"Clustering done, writing to file {output}.tsv.xz")
+    df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
+
+def kmer_clustering_dataframe (df, kmer_length = None, threshold = None, n_best = None, nthreads=1):
+    if kmer_length is None: kmer_length = 5
+    if threshold is None: threshold = 0.7
+    if n_best is None: n_best = 10
+    primers = df["primer"].tolist()
+    df["frequency"] = df["frequency"].astype(int)
+    df["max_distance"] = df["max_distance"].astype(int)
+    df["penalty"] = df["penalty"].astype(float)
+    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+
+    primers = [str(i) for i in primers]
+    kmers = [single_kmer(i,k = kmer_length) for i in primers]
+    logger.debug (f"Number of kmers: {len(kmers)}")
+    cluster_1,_,_ = cluster_single_kmers_parallel (kmers, threshold=threshold, jaccard=True, nthreads=nthreads)
+    n_clusters = len(set(cluster_1))
+    logger.debug (f"Number of clusters: {n_clusters}")
+    
+    df["kmer_cluster"] = cluster_1
+    df = df.groupby("kmer_cluster").head(n_best)
+    
+    df["clust_idx"] = df.groupby("kmer_cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
+    df = df.sort_values(by=["clust_idx", "frequency","max_distance","penalty"], ascending=[True,False,True,True])
+    df.drop(columns=["clust_idx"], inplace=True) # remove temporary column
+    return df
 
 def subsample_primers (df, subsample=100):
-    if subsample > 100: return df
+    if subsample >= 100: return df
     logger.info (f"Subsampling {len(df)} primers to {subsample:.2f}% of the original set over frequency, distance, and penalty (from primer3)")
     subsample /= 100 # pandas percentile uses 0-1 scale
     df["frequency"] = df["frequency"].astype(int)
@@ -265,37 +298,37 @@ def find_representatives_from_sequences_optics (sequences=None, names=None, outp
             f.write(str(f">{names[i]}\n{sequences[i]}\n").encode())
     logger.info(f"Wrote {len(idx)} representatives to file {output}")
 
-## testing algos
+## old code 
 
-def kmer_clustering_dataframe (df):
-    primers = df["primer"].tolist()
-    df["frequency"] = df["frequency"].astype(int)
-    df["max_distance"] = df["max_distance"].astype(int)
-    df["penalty"] = df["penalty"].astype(float)
-    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+def cluster_primers_from_tsv_old (tsv = None, output = None, min_samples = 2, subsample=100, nthreads = 1):
+    if tsv is None: 
+        logger.error("No tsv file provided")
+        return
+    if output is None:
+        output = "clusters." + '%012x' % random.randrange(16**12) 
+        logger.warning (f"No output file specified, writing to file {output}.tsv")
+    if subsample < 1e-5: subsample = 1e-5
+    if subsample > 100: subsample = 100
 
-    primers = [str(i) for i in primers]
-    kmers = [single_kmer(i,k = 5) for i in primers]
-    logger.debug (f"Number of kmers: {len(kmers)}")
-    # TODO: run this in parallel, using higher-level function. Currently we don't use centroid,cluster variables
-    cluster_1,_,_ = cluster_single_kmers (kmers, threshold=0.75, use_centroid=False, jaccard=True)
-    n_clusters = len(set(cluster_1))
-    logger.debug (f"Number of clusters: {n_clusters}")
-    if n_clusters < len(primers)/100:
-        cluster_2, _, _ = cluster_single_kmers (kmers, threshold=0.9, use_centroid=False, jaccard=False)
-        n_clusters2 = len(set(cluster_2))
-        logger.debug (f"Number of overlap clusters: {n_clusters2} for too few clusters")
-        cluster_1 = consensus_clustering (cluster_1, cluster_2) # oversplits clusters
-        n_clusters2 = len(set(cluster_1))
-        logger.debug (f"Number of consensus clusters: {n_clusters2}")
-    elif n_clusters > len(primers)/2:
-        cluster_1, _, _ = cluster_single_kmers (kmers, threshold=0.5, use_centroid=True, jaccard=False)
-        n_clusters = len(set(cluster_1))
-        logger.debug (f"Number of overlap clusters: {n_clusters} for too many clusters")
+    df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
+    #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
+    logger.info(f"Read {len(df)} primers from file {tsv}")
     
-    df["kmer_cluster"] = cluster_1
-    df = df.groupby("kmer_cluster").head(5)
-    return df
+    df = kmer_clustering_dataframe (df, nthreads=nthreads)
+    logger.info(f"Clustering done, writing to file {output}.tsv")
+    df.to_csv (f"{output}.tsv", sep="\t", index=False)
+
+    df = subsample_primers (df, subsample=subsample)
+    primers = df["primer"].tolist()
+    primers = [str(i) for i in primers]
+    score_mat = create_NW_score_matrix_parallel (primers, nthreads=nthreads)
+    logger.info(f"Pairwise distances calculated; will now cluster primers")
+    distmat = score_to_distance_matrix_fraction (score_mat, mafft=True)
+    with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
+        cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
+    df["cluster"] = cl.labels_
+    logger.info(f"Clustering done, writing to file {output}.tsv")
+    df.to_csv (f"{output}.tsv", sep="\t", index=False)
 
 def kmer_clustering_dataframe_old (df):
     primers = df["primer"].tolist()

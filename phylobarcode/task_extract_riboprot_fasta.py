@@ -23,8 +23,7 @@ genesets["right"]    += genesets["core"]
 
 # extract DNA sequences using pandas table with riboprotein info
 # TODO: create structure storing original genewise info (and save it as tsv like "coords" table but pointing to
-# generated fasta files)
-# TODO: store only zero-based coordinates (when reading GFF)
+# new coords in generated amplicon fasta files) -> useful in future for alignment+phylo
 
 def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir=None, output=None, 
         intergenic_space = 1000, short_operon = 1000, most_common_mosaics = 50, border = 50, riboprot_subset = None, 

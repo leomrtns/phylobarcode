@@ -91,8 +91,48 @@ def cluster_centroids (centroids, clusters, cent_2, clu_2, threshold=0.5, jaccar
             clusters.append(clu_2[i])
             centroids.append(single_kmer(cent_2[i]))
     return clusters, centroids
+    
+def cluster_centroids_pool (chunk, threshold=0.5, jaccard=True):
+    return cluster_centroids(*chunk, threshold=threshold, jaccard=jaccard)
 
-# TODO: use cluster_centroids() to run in parallel
+def cluster_single_kmers_parallel (sequences, length=None, threshold=None, jaccard=True, nthreads=1):
+    if threshold is None: threshold = 0.8
+    if nthreads == 1: return cluster_single_kmers (sequences, length, threshold, use_centroid=False, jaccard=jaccard)
+    if not isinstance (sequences, list): sequences = [sequences] # unlikely? silly?
+    if length is None:
+        if isinstance (sequences[0], single_kmer):length = sequences[0].get_k() 
+        else: length = 5
+    if jaccard is True: element = 0 ## which element from `similarity` to use
+    else:               element = 1
+    logger.info(f"Clustering {len(sequences)} kmers with threshold {threshold} using {nthreads} jobs")
+
+    from multiprocessing import Pool
+    from functools import partial
+#    original_indices = [list(range(i, len(kmers), nthreads)) for i in range(nthreads)]
+#    kmer_chunks = [ [kmers[i] for i in chunk] for chunk in original_indices]
+#    with Pool(nthreads) as p:
+#        results = p.map (partial (cluster_single_kmers, length=length, threshold=threshold, use_centroid=False, jaccard=jaccard), kmer_chunks)
+#    logger.info(f"Finished initial parallel clustering; now will merge clusters using threshold {threshold}")
+#    centroid_chunks = [res[2] for res in results]
+#    cluster_chunks = [[[ind[j] for j in i] for i in res[1]] for ind,res in zip(original_indices, results)]
+
+    kmers = [single_kmer(seq, k=length) if isinstance(seq, str) else seq for seq in sequences]
+    n_kmers = len(kmers)
+    cluster_chunks = [ [[j] for j in range(i, n_kmers, 2 * nthreads)] for i in range(2 * nthreads)]
+    centroid_chunks = [ [kmers[i[0]] for i in chunk] for chunk in cluster_chunks]
+    del (kmers)
+
+    with Pool(nthreads) as p:
+        while (len(centroid_chunks) > 1):
+            nt = len(centroid_chunks)//2 + len(centroid_chunks)%2
+            logger.debug(f"Clustering using {nt} threads; pool size = {len(cluster_chunks)}")
+            results = p.map (partial (cluster_centroids_pool, threshold=threshold, jaccard=jaccard), zip(centroid_chunks, cluster_chunks, centroid_chunks[nt:], cluster_chunks[nt:]))
+            centroid_chunks = [res[1] for res in results]
+            cluster_chunks = [res[0] for res in results]
+   
+    idx = map_clusters_to_indices(cluster_chunks[0], n_elements=n_kmers)
+    return idx, cluster_chunks[0], centroid_chunks[0]
+
 
 def map_clusters_to_indices (clusters, n_elements = None):
     if n_elements is None: n_elements = max([max(c) for c in clusters]) + 1 

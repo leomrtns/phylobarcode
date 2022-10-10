@@ -131,8 +131,8 @@ def get_features_from_gff (gff_file_list, gff_dir, scratch_dir, jmap):
         db = gffutils.create_db(gff_file, dbfn=database, force=True, keep_order=False, merge_strategy="merge", sort_attribute_values=False)
         for i in db.features_of_type('CDS'):
             gene = i.attributes["gene"][0] if "gene" in i.attributes else None
-            i.start = int(i.start - 1) # gffutils uses 1-based coordinates, we want 0-based
-            i.end = int(i.end -1)
+            i.start = int(i.start - 1) # gffutils uses 1-based coordinates, we want zero based
+            i.end = int(i.end -1) # zero based
             if jmap["ribogenes"] and gene and gene in jmap["ribogenes"].keys(): # ribosomal genes have names like rpsJ, rplK, etc.
                 gene = jmap["ribogenes"][gene]
                 a.append ([i.seqid, i.start, i.end, i.strand, gene]) # gff_file doesnt know which seq from fasta file, seqid does
