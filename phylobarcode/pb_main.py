@@ -85,7 +85,7 @@ def run_find_primers (args):
     else:
         logger.info(f"{args.nthreads} threads were requested by user (actual pool may be smaller)")
     task_find_primers.find_primers_parallel (fastafile=args.fasta, primer_opt_size=args.length, border=args.border, 
-            num_return=args.n_primers, output=args.prefix, nthreads=args.nthreads)
+            num_return=args.n_primers, taxon=args.taxon, output=args.prefix, nthreads=args.nthreads)
     return
 
 def run_cluster_flanks (args):
@@ -242,6 +242,8 @@ def main():
     this_help = "Find primers given a fasta file." # help is shown in "prog -h", description is shown in "prog this -h"
     extra_help= '''\n
     Runs `primer3_core` on each sequence in the alignment file, generating two tables, of left (l) and right (r) primers. Can use multiple threads.
+    If file with taxonomic information is provided (from `merge_fasta_gff`), it will be used to calculate
+    representativity of primers (called "taxon_diversity")
     '''
     up_findp = subp.add_parser('find_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
@@ -252,6 +254,8 @@ def main():
             help="how far from sequence borders, in bp, we should look for primers (default=400)")
     up_findp.add_argument('-n', '--n_primers', metavar='int', type=int, default=100, 
             help="how many primers, per sequence, per end, should be returned (default=100)")
+    up_findp.add_argument('-x', '--taxon', metavar='tsv',
+            help="tsv file with taxonomy information (output from 'merge_fasta_gff')")
     up_findp.set_defaults(func = run_find_primers)
 
     this_help = "Extract and cluster flanking regions of operons where primers may be found."
@@ -274,7 +278,8 @@ def main():
     this_help = "Cluster primers described in tsv file, adding a column to table with cluster number."
     extra_help= '''\n
     If several tsv files are given, default output files will keep their unique names (i.e. without common prefix or
-    suffix). The OPTICS algorithm is used to cluster primers.
+    suffix). A rough kmer-based (canopy) clustering is done, and for each canopy the OPTICS algorithm is used to cluster primers.
+
     If subsample percentage is given, then only "best" primers are considered, based on frequenct, longest distance of
     primer to border, and penalty score as given by primer3. 
     The input tsv files here should be the output of `find_primers`.
@@ -283,12 +288,13 @@ def main():
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('tsv', nargs="+", help="tsv files with primers (each ouput file from 'find_primers')")
     up_findp.add_argument('-k', '--kmer', type=int, default=5, help="kmer size for primer clustering (default=5)")
-    up_findp.add_argument('-t', '--threshold', type=float, default=0.7, help="threshold for primer clustering (default=0.7)")
-    up_findp.add_argument('-b', '--n_best', type=int, default=10, help="number of best primers from each cluster to keep (default=10)")
+    up_findp.add_argument('-t', '--threshold', type=float, default=0.5, 
+    help="threshold for primer clustering (default=0.5, should not be too high since there's a second clustering step)")
+    up_findp.add_argument('-b', '--n_best', type=int, default=-1, help="number of best primers from each cluster to keep (default=keep all)")
     up_findp.add_argument('-s', '--subsample', metavar='float', type=float, default=100,
             help="subsample percentage of best primers to be clustered (default=100, i.e. all primers)")
-    up_findp.add_argument('-m', '--min_samples', type=int, default=3, 
-            help="in OPTICS, minimum number of neighbours for sequence to be a core point (default=3; should be larger than 2)")
+    up_findp.add_argument('-m', '--min_samples', type=int, default=10, 
+            help="minimum number of elements in rough k-mer clustering for further clustering (default=10; should be larger than 3)")
     up_findp.set_defaults(func = run_cluster_primers)
 
     this_help = "Blast primers against database, checking for left-right pairs."

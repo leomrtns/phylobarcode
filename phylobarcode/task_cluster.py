@@ -64,53 +64,81 @@ def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, id
     logger.info (f"Finished. Reduced sequence sets saved to files {ofile_centroid[0]} and {ofile_centroid[1]};")
     return
     
-def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 2, subsample=100, kmer_length = None, 
-        threshold = None, n_best = None, nthreads = 1):
+def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsample=100, kmer_length = 5, 
+        threshold = 0.7, n_best = -1, nthreads = 1):
     if tsv is None: 
         logger.error("No tsv file provided")
         return
     if output is None:
         output = "clusters." + '%012x' % random.randrange(16**12) 
         logger.warning (f"No output file specified, writing to file {output}.tsv.xz")
-    if subsample < 1e-5: subsample = 1e-5
+    if min_samples < 3: min_samples = 3
+    if subsample < 1e-3: subsample = 1e-3
     if subsample > 100: subsample = 100
-    if kmer_length is None: kmer_length = 5
-    if threshold is None: threshold = 0.7
-    if n_best is None: n_best = 10
+    if kmer_length < 3: kmer_length = 3
+    if kmer_length > 18: kmer_length = 18
+    if threshold < 0.01: threshold = 0.01
+    if threshold > 1: threshold = 1
 
     df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
     logger.info(f"Read {len(df)} primers from file {tsv}")
+    if "cluster" in df.columns:
+        logger.warning (f"Column 'cluster' already exists in file {tsv}, overwriting")
+        df.drop(columns=["cluster"], inplace=True)
     
     df = subsample_primers (df, subsample=subsample)
 
-    df = kmer_clustering_dataframe (df, kmer_length = kmer_length, threshold = threshold, n_best = n_best, nthreads=nthreads)
-    logger.info(f"Clustering done, writing to file {output}.tsv.xz")
+    df = kmer_clustering_dataframe (df, kmer_length = kmer_length, threshold = threshold, nthreads=nthreads)
+    logger.info(f"Rough kmer-based pre-clustering done, writing to file {output}.tsv.xz")
     df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
-#    df = batch_cluster_primers (df, min_samples=min_samples, nthreads=nthreads)
+
+    df = batch_cluster_primers_from_kmer_cluster (df, min_samples=min_samples, nthreads=nthreads)
+    if n_best > 0: df = df.groupby("kmer_cluster").head(n_best)
+        
+    logger.info(f"Clustering finished, writing to file {output}.tsv.xz")
+    df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
     return
 
-def batch_cluster_primers (df, min_samples = 2, nthreads = 1):
-#    for df1 in  ## STOPHERE
-    primers = df["primer"].tolist()
-    primers = [str(i) for i in primers]
-    score_mat = create_NW_score_matrix_parallel (primers, nthreads=nthreads)
-    logger.info(f"Pairwise distances calculated; will now cluster primers")
-    distmat = score_to_distance_matrix_fraction (score_mat, mafft=True)
-    with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
-        cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
-    df["cluster"] = cl.labels_
-    logger.info(f"Clustering done, writing to file {output}.tsv.xz")
-    df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
+def batch_cluster_primers_from_kmer_cluster (df, min_samples = 5, nthreads = 1):
+    df1 = df[df.groupby("kmer_cluster")["kmer_cluster"].transform("count") >= min_samples]
+    df1 = df1[["primer", "kmer_cluster"]] # only primer sequence and current cluster
+    n_big_clusters = len(df1.kmer_cluster.unique())
+    logger.info(f"Clustering {len(df1)} primers from {n_big_clusters} large kmer clusters")
+    df_list = []
+    for i, cluster_id in enumerate(df1.kmer_cluster.unique()):
+        if i and i % (n_big_clusters//10) == 0: logger.debug(f"Clustering {i}th kmer cluster")
+        primers = df1[df1["kmer_cluster"] == cluster_id]["primer"].tolist()
+        primers = [str(i) for i in primers]
+        score_mat = create_NW_score_matrix_parallel (primers, nthreads=nthreads)
+        distmat = score_to_distance_matrix_fraction (score_mat, mafft=True)
+        with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
+            cl = cluster.OPTICS(min_samples=2, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
+        inc = itertools.count(max(cl.labels_)) ## counter
+        cl.labels_ = [f"{cluster_id}_{next(inc)}" if i == -1 else f"{cluster_id}_{i}" for i in cl.labels_] ## transform noise samples into their own clusters
+        df_local = pd.DataFrame({"primer":primers, "cluster":cl.labels_}) # new column "cluster"
+        df_list.append(df_local)
+    df1 = pd.concat(df_list) ## looks like df1, but has column "cluster" only
+    df = df.merge(df1, on="primer", how="left") # merge with original dataframe (which now has "kmer_cluster" and "cluster" columns)
+    logger.debug(df)
+    df["cluster"].fillna(df["kmer_cluster"], inplace=True) # now "cluster" is a refined version of "kmer_cluster"
+    df.drop(columns=["kmer_cluster"], inplace=True)
+    # spread out clusters (so that member of same cluster do not appear consecutively)
+    df["clust_idx"] = df.groupby("cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
+    df = df.sort_values(
+            by=["clust_idx", "taxon_diversity", "frequency","max_distance","penalty"], 
+            ascending=[True,False, False,True,True])
+    df.drop(columns=["clust_idx"], inplace=True) # remove temporary column
+    return df
 
-def kmer_clustering_dataframe (df, kmer_length = None, threshold = None, n_best = None, nthreads=1):
+def kmer_clustering_dataframe (df, kmer_length = None, threshold = None, nthreads=1):
     if kmer_length is None: kmer_length = 5
     if threshold is None: threshold = 0.7
-    if n_best is None: n_best = 10
     primers = df["primer"].tolist()
+    df["taxon_diversity"] = df["taxon_diversity"].astype(int)
     df["frequency"] = df["frequency"].astype(int)
     df["max_distance"] = df["max_distance"].astype(int)
     df["penalty"] = df["penalty"].astype(float)
-    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+    df = df.sort_values(by=["taxon_diversity","frequency","max_distance","penalty"], ascending=[False,False,True,True])
 
     primers = [str(i) for i in primers]
     kmers = [single_kmer(i,k = kmer_length) for i in primers]
@@ -118,37 +146,48 @@ def kmer_clustering_dataframe (df, kmer_length = None, threshold = None, n_best 
     cluster_1,_,_ = cluster_single_kmers_parallel (kmers, threshold=threshold, jaccard=True, nthreads=nthreads)
     n_clusters = len(set(cluster_1))
     logger.debug (f"Number of clusters: {n_clusters}")
-    
     df["kmer_cluster"] = cluster_1
-    df = df.groupby("kmer_cluster").head(n_best)
     
     df["clust_idx"] = df.groupby("kmer_cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
-    df = df.sort_values(by=["clust_idx", "frequency","max_distance","penalty"], ascending=[True,False,True,True])
+    df = df.sort_values(
+            by=["clust_idx", "taxon_diversity", "frequency","max_distance","penalty"], 
+            ascending=[True,False,False,True,True])
     df.drop(columns=["clust_idx"], inplace=True) # remove temporary column
     return df
 
 def subsample_primers (df, subsample=100):
     if subsample >= 100: return df
-    logger.info (f"Subsampling {len(df)} primers to {subsample:.2f}% of the original set over frequency, distance, and penalty (from primer3)")
+    logger.info (f"Subsampling {len(df)} primers to {subsample:.2f}% of the original set over frequencies, distance, and penalty (from primer3)")
     subsample /= 100 # pandas percentile uses 0-1 scale
+    df["taxon_diversity"] = df["taxon_diversity"].astype(int)
     df["frequency"] = df["frequency"].astype(int)
     df["max_distance"] = df["max_distance"].astype(int)
     df["penalty"] = df["penalty"].astype(float)
     threshold = {
-            "frequency": df["frequency"].quantile(1. - subsample), # quantile goes from min to max, thus we want 100-x% smallest value
-            "max_distance": df["max_distance"].quantile(subsample),
-            "penalty": df["penalty"].quantile(subsample)
-            }
-    if threshold["frequency"] > 1: # all primers have freq at least one thus all would be chosen  
-        df = df[(df["frequency"] >= threshold["frequency"]) | 
+        "taxon_diversity": df["taxon_diversity"].quantile(1. - subsample),
+        "frequency": df["frequency"].quantile(1. - subsample), # quantile goes from min to max, thus we want 100-x% smallest value
+        "max_distance": df["max_distance"].quantile(subsample),
+        "penalty": df["penalty"].quantile(subsample)
+        }
+    max_div = df["taxon_diversity"].max()
+    if threshold["taxon_diversity"] > 1: # all primers have freq at least one thus all would be chosen  
+        df = df[(df["taxon_diversity"] >= threshold["taxon_diversity"]) | 
+                (df["frequency"] >= threshold["frequency"]) | 
                 (df["max_distance"] < threshold["max_distance"]) |
                 (df["penalty"] < threshold["penalty"])]
-    else:
-        df = df[(df["frequency"] > threshold["frequency"]) | # OR large frequency OR freq=1 but small distance or penalty
-                ((df["max_distance"] < threshold["max_distance"]) &
+    elif max_div <= 1: # taxonomic info probably missing when finding primers; must neglect this column
+        df = df[(df["frequency"] >= threshold["frequency"]) |
+                (df["max_distance"] < threshold["max_distance"]) |
+                (df["penalty"] < threshold["penalty"])]
+    else: # max diversity is > 1 however threshold is 1, thus all primers would have been chosen
+        df = df[(df["taxon_diversity"] > 1) | # OR large diversity OR taxon_div=1 but small distance or penalty
+                ((df["frequency"] > threshold["frequency"]) & 
+                 (df["max_distance"] < threshold["max_distance"]) &
                  (df["penalty"] < threshold["penalty"]))]
     logger.info (f"Subsampling done, {len(df)} primers kept using thresholds {threshold}")
-    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+    df = df.sort_values(
+            by=["taxon_diversity","frequency","max_distance","penalty"], 
+            ascending=[False,False,True,True])
     return df
 
 def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seqs don't need to be aligned, must be strings
@@ -194,7 +233,7 @@ def create_NW_score_matrix_parallel (seqlist, use_parasail = True, band_size = 0
             logger.warning("Parasail module not installed, reverting to Bio.pairwise2 from Biopython")
             use_parasail = False
     size = len(seqlist)
-    logger.info(f"Calculating pairwise alignment scores for {size} sequences using {nthreads} threads")
+    logger.debug(f"Calculating pairwise alignment scores for {size} sequences using {nthreads} threads")
     pairs = list(itertools.combinations(range(size),2)) + [(i,i) for i in range(size)]
     pairchunks = [pairs[i::nthreads] for i in range(nthreads)]
 

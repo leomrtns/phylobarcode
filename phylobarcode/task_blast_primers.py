@@ -232,7 +232,8 @@ def sort_primers_by_performance (df):
             "perfect_matches":False,
             "avge_mismatches":True,
             "n_mismatches":True,
-            "frequency":False
+            "taxon_diversity":False, # how many taxonid this primer was generated from
+            "frequency":False # how many sequences this primer was generated from
             }
     sort_columns = [k for k in sort_columns_dict.keys() if k in df.columns] # taxon info may be missing
     return df.sort_values(sort_columns, ascending=[sort_columns_dict[k] for k in sort_columns])

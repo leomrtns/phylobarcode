@@ -125,7 +125,8 @@ def cluster_single_kmers_parallel (sequences, length=None, threshold=None, jacca
     with Pool(nthreads) as p:
         while (len(centroid_chunks) > 1):
             nt = len(centroid_chunks)//2 + len(centroid_chunks)%2
-            logger.debug(f"Clustering using {nt} threads; pool size = {len(cluster_chunks)}")
+            n_clusters = sum([len(i) for i in cluster_chunks])
+            logger.info(f"Clustering using {nt} threads; pool size = {len(cluster_chunks)} with {n_clusters} clusters")
             results = p.map (partial (cluster_centroids_pool, threshold=threshold, jaccard=jaccard), zip(centroid_chunks, cluster_chunks, centroid_chunks[nt:], cluster_chunks[nt:]))
             centroid_chunks = [res[1] for res in results]
             cluster_chunks = [res[0] for res in results]
