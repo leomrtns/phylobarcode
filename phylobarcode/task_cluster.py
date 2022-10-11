@@ -147,6 +147,7 @@ def kmer_clustering_dataframe (df, kmer_length = None, threshold = None, nthread
     n_clusters = len(set(cluster_1))
     logger.debug (f"Number of clusters: {n_clusters}")
     df["kmer_cluster"] = cluster_1
+    df["kmer_cluster"] = df["kmer_cluster"].astype(str)
     
     df["clust_idx"] = df.groupby("kmer_cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
     df = df.sort_values(
@@ -181,7 +182,7 @@ def subsample_primers (df, subsample=100):
                 (df["penalty"] < threshold["penalty"])]
     else: # max diversity is > 1 however threshold is 1, thus all primers would have been chosen
         df = df[(df["taxon_diversity"] > 1) | # OR large diversity OR taxon_div=1 but small distance or penalty
-                ((df["frequency"] > threshold["frequency"]) & 
+                ((df["frequency"] >= threshold["frequency"]) & 
                  (df["max_distance"] < threshold["max_distance"]) &
                  (df["penalty"] < threshold["penalty"]))]
     logger.info (f"Subsampling done, {len(df)} primers kept using thresholds {threshold}")
@@ -201,7 +202,7 @@ def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seq
     size = len(seqlist)
     scoremat = np.zeros((size, size))
     if use_parasail is True and band_size == 0:
-        mymat = parasai.pam10
+        mymat = parasail.pam10
         for i in range(size): 
             scoremat[i,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[i]), 10, 2, mymat).score # nw (sg doenst penalise begin and end )
         for i,j in itertools.combinations(range(size),2): #parasail._stats_ also gives x.length, x.score
@@ -253,14 +254,15 @@ def nw_score_matrix_for_pairlist (pairlist, seqlist, use_parasail, band_size):
     scorelist = []
     if use_parasail is True and band_size == 0:
         import parasail
+        mymat = parasail.pam10
         for i, j in pairlist:
-            d_ij = parasail.sg_striped_16(seqlist[i], seqlist[j], 9,1, parasail.blosum30).score
+            d_ij = parasail.sg_striped_16(seqlist[i], seqlist[j], 10, 2, mymat).score
             scorelist.append(d_ij)
     elif use_parasail is True and isinstance(band_size, int): # banded: not semi-global but "full" NW, with simple penalty matrix
         import parasail
-        mymat = parasail.matrix_create("ACGT", 2, -1)
+        mymat = parasail.matrix_create("ACGT", 3, -1)
         for i, j in pairlist:
-            d_ij = parasail.nw_banded(seqlist[i], seqlist[j], 8, 1, band_size, mymat).score
+            d_ij = parasail.nw_banded(seqlist[i], seqlist[j], 10, 2, band_size, mymat).score
             scorelist.append(d_ij)
     else:
         for i, j in pairlist:

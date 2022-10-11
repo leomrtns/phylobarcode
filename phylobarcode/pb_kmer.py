@@ -128,6 +128,8 @@ def cluster_single_kmers_parallel (sequences, length=None, threshold=None, jacca
             n_clusters = sum([len(i) for i in cluster_chunks])
             logger.info(f"Clustering using {nt} threads; pool size = {len(cluster_chunks)} with {n_clusters} clusters")
             results = p.map (partial (cluster_centroids_pool, threshold=threshold, jaccard=jaccard), zip(centroid_chunks, cluster_chunks, centroid_chunks[nt:], cluster_chunks[nt:]))
+            # nt=2 but 3 chunks->  zip([0,1,2], [2]) --> 0-2 paired but 1 is left out
+            if len(centroid_chunks) % 2 == 1:  results.append ([cluster_chunks[nt-1], centroid_chunks[nt-1]])
             centroid_chunks = [res[1] for res in results]
             cluster_chunks = [res[0] for res in results]
    
@@ -139,7 +141,7 @@ def map_clusters_to_indices (clusters, n_elements = None):
     if n_elements is None: n_elements = max([max(c) for c in clusters]) + 1 
     idx = [None] * n_elements
     for i, c in enumerate(clusters):
-        for j in c: idx[j] = i
+        for j in c: idx[j] = str(i)
     return idx
 
 def consensus_clustering (cluster_1, cluster_2):
