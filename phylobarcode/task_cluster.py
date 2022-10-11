@@ -106,7 +106,7 @@ def batch_cluster_primers_from_kmer_cluster (df, min_samples = 5, nthreads = 1):
     logger.info(f"Clustering {len(df1)} primers from {n_big_clusters} large kmer clusters")
     df_list = []
     for i, cluster_id in enumerate(df1.kmer_cluster.unique()):
-        if i and i % (n_big_clusters//10) == 0: logger.debug(f"Clustering {i}th kmer cluster")
+        if i and i % (n_big_clusters//10) == 0: logger.info(f"Clustering {i}th kmer cluster")
         primers = df1[df1["kmer_cluster"] == cluster_id]["primer"].tolist()
         primers = [str(i) for i in primers]
         score_mat = create_NW_score_matrix_parallel (primers, nthreads=nthreads)
@@ -201,17 +201,18 @@ def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seq
     size = len(seqlist)
     scoremat = np.zeros((size, size))
     if use_parasail is True and band_size == 0:
+        mymat = parasai.pam10
         for i in range(size): 
-            scoremat[i,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[i]), 10,1, parasail.blosum30).score # nw (sg doenst penalise begin and end )
+            scoremat[i,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[i]), 10, 2, mymat).score # nw (sg doenst penalise begin and end )
         for i,j in itertools.combinations(range(size),2): #parasail._stats_ also gives x.length, x.score
             #scoremat[i,j] = scoremat[j,i] = parasail.nw_stats_striped_16(str(seqlist[i]), str(seqlist[j]), 11,1, parasail.blosum30).matches
-            scoremat[i,j] = scoremat[j,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[j]), 10,1, parasail.blosum30).score
+            scoremat[i,j] = scoremat[j,i] = parasail.sg_striped_16(str(seqlist[i]), str(seqlist[j]), 10, 2, mymat).score
     elif use_parasail is True and isinstance(band_size, int): # banded: not semi-global but "full" NW, with simple penalty matrix
-        mymat = parasail.matrix_create("ACGT", 2, -1)
+        mymat = parasail.matrix_create("ACGT", 3, -1)
         for i in range(size):
-            scoremat[i,i] = parasail.nw_banded(str(seqlist[i]), str(seqlist[i]), 10, 1, band_size, mymat).score # global Needleman-Wunsch 
+            scoremat[i,i] = parasail.nw_banded(str(seqlist[i]), str(seqlist[i]), 10, 2, band_size, mymat).score # global Needleman-Wunsch 
         for i,j in itertools.combinations(range(size),2): #parasail._stats_ also gives x.length, x.score
-            scoremat[i,j] = scoremat[j,i] = parasail.nw_banded(str(seqlist[i]), str(seqlist[j]), 10, 1, band_size, mymat).score
+            scoremat[i,j] = scoremat[j,i] = parasail.nw_banded(str(seqlist[i]), str(seqlist[j]), 10, 2, band_size, mymat).score
     else:
         for i in range(size): 
             scoremat[i,i] = float(len(seqlist[i]))  # diagonals have sequence lengths (=best possible score!)
