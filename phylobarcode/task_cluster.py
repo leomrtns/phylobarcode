@@ -93,9 +93,9 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsa
     df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
 
     df = batch_cluster_primers_from_kmer_cluster (df, min_samples=min_samples, nthreads=nthreads)
-    if n_best > 0: df = df.groupby("kmer_cluster").head(n_best)
+    if n_best > 0: df = df.groupby("cluster").head(n_best)
         
-    logger.info(f"Clustering finished, writing to file {output}.tsv.xz")
+    logger.info(f"Total of {df['cluster'].nunique()} clusters found, writing to file {output}.tsv.xz")
     df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
     return
 
