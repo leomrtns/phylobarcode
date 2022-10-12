@@ -120,26 +120,28 @@ def pool_get_primers_parallel (thread_number, border = 400, num_return=100, fast
     return res
 
 def save_primers_to_file (ldic, rdic, output): # below, each v = dict[k] = [[penalty1, distance1,taxon], [penalty2,distance2,taxon], ...] 
-    def get_uniq (x): # x[2] is taxon name 
-        return len(set([i[2] for i in x]))
+    def get_uniq (x,j): # x[2] is taxon name , x[3] is genus name
+        return len(set([i[j] for i in x]))
     def get_fun (func, x, j):
         return func([i[j] for i in x])
 
-    llist = [[k, get_uniq(v), len(v), round(get_fun(max,v,0),4), int(get_fun(min,v,1)), int(get_fun(max,v,1))] for k, v in ldic.items()]
-    rlist = [[k, get_uniq(v), len(v), round(get_fun(max,v,0),4), int(get_fun(min,v,1)), int(get_fun(max,v,1))] for k, v in rdic.items()]
+    llist = [[k, get_uniq(v,3), get_uniq(v,2), len(v), 
+        round(get_fun(max,v,0),4), int(get_fun(min,v,1)), int(get_fun(max,v,1))] for k, v in ldic.items()]
+    rlist = [[k, get_uniq(v,3), get_uniq(v,2), len(v), 
+        round(get_fun(max,v,0),4), int(get_fun(min,v,1)), int(get_fun(max,v,1))] for k, v in rdic.items()]
     ## this numpy below doesnt work with strings 
-    #llist = [[k, get_uniq(v), len(v), np.amax(v,axis=0)[0], int(np.amin(v,axis=0)[1]), int(np.amax(v,axis=0)[1])] for k, v in ldic.items()]
-    #rlist = [[k, get_uniq(v), len(v), np.amax(v,axis=0)[0], int(np.amin(v,axis=0)[1]), int(np.amax(v,axis=0)[1])] for k, v in rdic.items()]
-    llist.sort(key=lambda x: x[1], reverse=True)
-    rlist.sort(key=lambda x: x[1], reverse=True)
+    #llist = [[k, len(v), np.amax(v,axis=0)[0], int(np.amin(v,axis=0)[1]), int(np.amax(v,axis=0)[1])] for k, v in ldic.items()]
+    #rlist = [[k, len(v), np.amax(v,axis=0)[0], int(np.amin(v,axis=0)[1]), int(np.amax(v,axis=0)[1])] for k, v in rdic.items()]
+    llist.sort(key=lambda x: (x[1],x[2],x[3]), reverse=True)
+    rlist.sort(key=lambda x: (x[1],x[2],x[3]), reverse=True)
 
     with open_anyformat (f"{output}_l.tsv.xz", "w") as f:
-        f.write (str("primer\ttaxon_diversity\tfrequency\tpenalty\tmin_distance\tmax_distance\n").encode())
+        f.write (str("primer\tgenus_diversity\ttaxon_diversity\tfrequency\tpenalty\tmin_distance\tmax_distance\n").encode())
         for x in llist:
             row = "\t".join([str(i) for i in x]) + "\n"
             f.write (str(row).encode()) # encode() is needed in case output is compressed
     with open_anyformat (f"{output}_r.tsv.xz", "w") as f:
-        f.write (str("primer\ttaxon_diversity\tfrequency\tpenalty\tmin_distance\tmax_distance\n").encode())
+        f.write (str("primer\tgenus_diversity\ttaxon_diversity\tfrequency\tpenalty\tmin_distance\tmax_distance\n").encode())
         for x in rlist:
             row = "\t".join([str(i) for i in x]) + "\n"
             f.write (str(row).encode()) # encode() is needed in case output is compressed
@@ -153,6 +155,9 @@ def extract_primer_from_output (output, seqname, seqlen, taxon_df = None):
     taxonname = "unknown"
     if taxon_df is not None and seqname in taxon_df["seqid"].values:
         taxonname = str(taxon_df.loc[taxon_df['seqid'] == seqname, 'taxonid'].iloc[0])
+    genusname = "unknown"
+    if taxon_df is not None and seqname in taxon_df["seqid"].values:
+        genusname = str(taxon_df.loc[taxon_df['seqid'] == seqname, 'genus'].iloc[0])
 
     def xtract_left_or_right (out, side, seqlen):
         y=[re.match(f"PRIMER_{side}_(\d+)_SEQUENCE=(.*)",x) for x in out] # most will be "None" since won't match
@@ -167,7 +172,7 @@ def extract_primer_from_output (output, seqname, seqlen, taxon_df = None):
             return None
         idx = [i[0] for i in pseq] + [i[0] for i in ppen] + [i[0] for i in pstart] # flattened version of two index lists (e.g. [0,1,2...,0,1,2...])
         min_idx = min(idx) ## make sure it starts from 0 (which is already the case in current version of primer3...)
-        spl = [[None,None,None, taxonname] for i in range (max(idx) + 1 - min_idx)] ## length = max between two lists flattened (base_zero -> max +1 is length)
+        spl = [[None,None,None, taxonname, genusname] for i in range (max(idx) + 1 - min_idx)] ## length = max between two lists flattened (base_zero -> max +1 is length)
         for i in pseq:
             spl[i[0]-min_idx][0] = str(i[1]).upper()
         for i in ppen:
@@ -178,7 +183,7 @@ def extract_primer_from_output (output, seqname, seqlen, taxon_df = None):
         else: # start is distance from beginning of sequence
             for i in pstart:
                 spl[i[0]-min_idx][2] = i[1]
-        return [i for i in spl if i[0] is not None] # each elem is [sequence,penalty, dist_from_border, taxonname]
+        return [i for i in spl if i[0] is not None] # each elem is [sequence,penalty,dist_from_border,taxonname,genusname]
 
     left = xtract_left_or_right (output, "LEFT", None)
     right = xtract_left_or_right (output, "RIGHT", seqlen)

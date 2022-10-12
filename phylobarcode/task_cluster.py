@@ -125,8 +125,8 @@ def batch_cluster_primers_from_kmer_cluster (df, min_samples = 5, nthreads = 1):
     # spread out clusters (so that member of same cluster do not appear consecutively)
     df["clust_idx"] = df.groupby("cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
     df = df.sort_values(
-            by=["clust_idx", "taxon_diversity", "frequency","max_distance","penalty"], 
-            ascending=[True,False, False,True,True])
+            by=["clust_idx","genus_diversity","taxon_diversity","frequency","max_distance","penalty"], 
+            ascending=[True,False,False,False,True,True])
     df.drop(columns=["clust_idx"], inplace=True) # remove temporary column
     return df
 
@@ -134,11 +134,14 @@ def kmer_clustering_dataframe (df, kmer_length = None, threshold = None, nthread
     if kmer_length is None: kmer_length = 5
     if threshold is None: threshold = 0.7
     primers = df["primer"].tolist()
+    df["genus_diversity"] = df["genus_diversity"].astype(int)
     df["taxon_diversity"] = df["taxon_diversity"].astype(int)
     df["frequency"] = df["frequency"].astype(int)
     df["max_distance"] = df["max_distance"].astype(int)
     df["penalty"] = df["penalty"].astype(float)
-    df = df.sort_values(by=["taxon_diversity","frequency","max_distance","penalty"], ascending=[False,False,True,True])
+    df = df.sort_values(
+        by=["genus_diversity","taxon_diversity","frequency","max_distance","penalty"],
+        ascending=[False,False,False,True,True])
 
     primers = [str(i) for i in primers]
     kmers = [single_kmer(i,k = kmer_length) for i in primers]
@@ -151,8 +154,8 @@ def kmer_clustering_dataframe (df, kmer_length = None, threshold = None, nthread
     
     df["clust_idx"] = df.groupby("kmer_cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
     df = df.sort_values(
-            by=["clust_idx", "taxon_diversity", "frequency","max_distance","penalty"], 
-            ascending=[True,False,False,True,True])
+            by=["clust_idx","genus_diversity","taxon_diversity","frequency","max_distance","penalty"], 
+            ascending=[True,False,False,False,True,True])
     df.drop(columns=["clust_idx"], inplace=True) # remove temporary column
     return df
 
@@ -160,19 +163,22 @@ def subsample_primers (df, subsample=100):
     if subsample >= 100: return df
     logger.info (f"Subsampling {len(df)} primers to {subsample:.2f}% of the original set over frequencies, distance, and penalty (from primer3)")
     subsample /= 100 # pandas percentile uses 0-1 scale
+    df["genus_diversity"] = df["genus_diversity"].astype(int)
     df["taxon_diversity"] = df["taxon_diversity"].astype(int)
     df["frequency"] = df["frequency"].astype(int)
     df["max_distance"] = df["max_distance"].astype(int)
     df["penalty"] = df["penalty"].astype(float)
     threshold = {
+        "genus_diversity": df["genus_diversity"].quantile(1. - subsample), # always smaller than taxon_diversity
         "taxon_diversity": df["taxon_diversity"].quantile(1. - subsample),
         "frequency": df["frequency"].quantile(1. - subsample), # quantile goes from min to max, thus we want 100-x% smallest value
         "max_distance": df["max_distance"].quantile(subsample),
         "penalty": df["penalty"].quantile(subsample)
         }
-    max_div = df["taxon_diversity"].max()
+    max_div = df["taxon_diversity"].max() # if GTDB file was not given then all have {taxon/genus}_diversity = 1
     if threshold["taxon_diversity"] > 1: # all primers have freq at least one thus all would be chosen  
         df = df[(df["taxon_diversity"] >= threshold["taxon_diversity"]) | 
+                (df["genus_diversity"] >= threshold["genus_diversity"]) | # genus_diversity is too strict, used only here
                 (df["frequency"] >= threshold["frequency"]) | 
                 (df["max_distance"] < threshold["max_distance"]) |
                 (df["penalty"] < threshold["penalty"])]
@@ -187,8 +193,8 @@ def subsample_primers (df, subsample=100):
                  (df["penalty"] < threshold["penalty"]))]
     logger.info (f"Subsampling done, {len(df)} primers kept using thresholds {threshold}")
     df = df.sort_values(
-            by=["taxon_diversity","frequency","max_distance","penalty"], 
-            ascending=[False,False,True,True])
+            by=["genus_diversity","taxon_diversity","frequency","max_distance","penalty"], 
+            ascending=[False,False,False,True,True])
     return df
 
 def create_NW_score_matrix (seqlist, use_parasail = True, band_size = 0): ## seqs don't need to be aligned, must be strings

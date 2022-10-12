@@ -72,7 +72,7 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
             df_fasta = pd.concat([df_fasta, fasta_tsv], ignore_index=True)
         else:
             logger.info(f"FASTA: found {len(df_fasta)} sequences in directory {fastadir}")
-        tsvfilename = f"{output}_fasta.tsv.gz"
+        tsvfilename = f"{output}_fasta.tsv.xz"
         df_fasta.to_csv (tsvfilename, sep="\t", index=False)
         logger.info(f"All fasta entries wrote to {tsvfilename}")
     else:
@@ -111,7 +111,7 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
             df_gff = pd.concat([df_gff, gff_tsv], ignore_index=True)
         else:
             logger.info(f"GFF: found {len(df_gff)} sequences in directory {gffdir}")
-        tsvfilename = f"{output}_gff.tsv.gz"
+        tsvfilename = f"{output}_gff.tsv.xz"
         df_gff.to_csv (tsvfilename, sep="\t", index=False)
         logger.info(f"All GFF entries wrote to {tsvfilename}")
     else:
@@ -138,7 +138,7 @@ def merge_fasta_gff (fastadir=None, gffdir=None, fasta_tsvfile = None, gff_tsvfi
     df = read_gtdb_taxonomy_and_merge (gtdb, df)
     full_dlen = len(df) - df["gtdb_accession"].isnull().sum() # sum=count null values
 
-    tsvfilename = f"{output}_merged.tsv.gz"
+    tsvfilename = f"{output}_merged.tsv.xz"
     logger.info(f"Found {full_dlen} samples with complete information; writing all (including incomplete) to {tsvfilename}")
     print (df.head())
     df.to_csv (tsvfilename, sep="\t", index=False)

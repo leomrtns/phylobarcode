@@ -138,7 +138,8 @@ def query_primers_blastn_on_database (primer_list, database=None, evalue = 1, ta
     try:
         df = pd.read_table (io.StringIO(child.stdout.read()), header=None)
     except pd.errors.EmptyDataError:
-        logger.error("No data returned from blast; try increasing evalue and not using `accurate` task")
+        logger.error("No data returned from blast; If you are sure the database location and name are correct (I guess"
+                "they are not!), then try increasing evalue and not using `accurate` task")
         return None
     default_outfmt6_cols = 'qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qseq ssqeq'.strip().split(' ')
     df.columns = default_outfmt6_cols
@@ -166,12 +167,12 @@ def stats_merge_blast_and_primers (blast_df, primer_df):
     def summarise_blast_df (blast_df, suffix=""):
         df = blast_df.groupby("qseqid").agg({
             "sseqid":["count","nunique"], 
-            "len_match_diff":[("mean", lambda x: round(np.mean(x),2))],
-            "evalue": [("mean", lambda x: round(np.mean(x),2))], # tuple = (name, function); must be in a list
+            "len_match_diff":[("mean", lambda x: round(np.mean(x),3))],
+            "evalue": [("mean", lambda x: round(np.mean(x),3))], # tuple = (name, function); must be in a list
             "bitscore":"max", 
             "qseq":longest_mode, 
             "mismatch":[
-                ("mean", lambda x: round(np.mean(x),2)), 
+                ("mean", lambda x: round(np.mean(x),3)), 
                 ("n_mismatches",lambda x: x.gt(0).sum()),
                 ("perfect_matches", lambda x: x.eq(0).sum())
                 ] # list of tuples 
@@ -187,6 +188,17 @@ def stats_merge_blast_and_primers (blast_df, primer_df):
                 "species":"nunique"
                 }).reset_index() # qseqid is index, not column
             df = df.merge(df2, on="qseqid", how="left")
+            
+        df = df.astype({ # nullable integer type https://pandas.pydata.org/pandas-docs/stable/user_guide/integer_na.html (notice capital Int)
+            "sseqid_count":'Int64', # unline int, can hold NaN values without converting to float 
+            "sseqid_nunique":'Int64',
+            "mismatch_n_mismatches":'Int64',
+            "mismatch_perfect_matches":'Int64',
+            "taxonid":"Int64",
+            "family":"Int64",
+            "genus":"Int64",
+            "species":"Int64"
+            }, errors="ignore")
         df.rename(columns={
             "qseqid":"primer", 
             "sseqid_count":"avge_hits" + suffix,
