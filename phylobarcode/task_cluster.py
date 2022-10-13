@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json?
 from phylobarcode.pb_kmer import * 
-#from phylobarcode.pb_short_kmer import * 
 import pandas as pd, numpy as np
 import itertools, pathlib, shutil, gzip
 from Bio import pairwise2
@@ -10,6 +9,9 @@ from sklearn import cluster
 # legacy code, no need to create a distinct stream
 # log_format = logging.Formatter(fmt='phylobarcode_clustr %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 logger = logging.getLogger("phylobarcode_global_logger")
+
+# FIXME: use parasail.sg_stats_striped_16().matches and len(seq) instead of scores 
+# (see https://manpages.debian.org/stretch/vsearch/vsearch.1 `--iddef` for possibilities)
 
 def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, identity = None, min_samples = 2, scratch = None, nthreads=1):
     if border is None: border = 400
@@ -87,6 +89,11 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsa
         df.drop(columns=["cluster"], inplace=True)
     
     df = subsample_primers (df, subsample=subsample)
+
+    df = cluster_primers_with_vsearch (df)
+    logger.info (f"Found {len(df['v_cluster'].unique())} clusters with vsearch, writing to file {output}.tsv.xz")
+    df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
+    return
 
     df = kmer_clustering_dataframe (df, kmer_length = kmer_length, threshold = threshold, nthreads=nthreads)
     logger.info(f"Rough kmer-based pre-clustering done, writing to file {output}.tsv.xz")
@@ -294,7 +301,7 @@ def score_to_distance_matrix_fraction (scoremat, mafft = False):
             distmat[i,j] = distmat[j,i] = (scoremat[i,i] + scoremat[j,j]) / scoremat[i,j] - 2. # avoids division by zero
     return distmat
     
-def find_centroids_from_file_vsearch (fastafile=None, output=None, identity=0.95, nthreads=0, scratch=None):
+def find_centroids_from_file_vsearch (fastafile=None, output=None, identity=0.95, nthreads=1, scratch=None):
     if fastafile is None:
         logger.error("No fasta file provided")
         return
@@ -304,6 +311,7 @@ def find_centroids_from_file_vsearch (fastafile=None, output=None, identity=0.95
     if scratch is None:
         scratch = "."
         logger.warning (f"No scratch directory provided, writing to current directory")
+    if nthreads < 1: nthreads = 1
     tmpfile = os.path.join(scratch, "tmp." + '%012x' % random.randrange(16**12) + ".fasta")
     # run vsearch and store centroids into unzipped tmpfile
     runstr = f"vsearch --cluster_fast {fastafile} --id {identity} --centroids {tmpfile} --threads {nthreads}"
@@ -346,63 +354,90 @@ def find_representatives_from_sequences_optics (sequences=None, names=None, outp
             f.write(str(f">{names[i]}\n{sequences[i]}\n").encode())
     logger.info(f"Wrote {len(idx)} representatives to file {output}")
 
-## old code 
 
-def cluster_primers_from_tsv_old (tsv = None, output = None, min_samples = 2, subsample=100, nthreads = 1):
-    if tsv is None: 
-        logger.error("No tsv file provided")
-        return
-    if output is None:
-        output = "clusters." + '%012x' % random.randrange(16**12) 
-        logger.warning (f"No output file specified, writing to file {output}.tsv")
-    if subsample < 1e-5: subsample = 1e-5
-    if subsample > 100: subsample = 100
+def cluster_primers_with_vsearch (df, maxdiffs=8, maxgaps=10, identity=0.8, scratch = None, nthreads=1):
+    '''
+    still tends to oversplit (from 241k to 65k clusters with maxgaps=maxdiffs=30 and id=0.2)
+    '''
+    def df_from_consensus_fasta (fasfile):
+        falist = read_fasta_as_list (fasfile)
+        logger.info(f"Read {len(falist)} sequences from consensus file {fasfile}")
+        #seqnames are  ">centroid=CGGCCTTCTCGACCGC;seqs=1"
+        falist = [[re.search('centroid=(.*);seqs', s.id).group(1), s.seq] for s in falist]
+        df = pd.DataFrame(falist, columns=['primer', 'consensus'])
+        return df
+    def df_from_profile (profile):
+        lines = [l.strip() for l in open(profile, 'r').readlines() if l.strip() != ""]
+        logger.info(f"Read {len(lines)} lines from profile file {profile}")
+        seqname = None
+        prof = {}
+        sizes = {}
+        for l in lines:
+            if l.startswith(">"): # >centroid=AAAGTATCATAATTGACAACTTGTCCAT;seqs=35
+                seqname = re.search('centroid=(.*);seqs', l).group(1)
+                sizes[seqname] = int(re.search(';seqs=(\d+)', l).group(1))
+                prof[seqname] = []
+            else: prof[seqname].append(l)
+        del (lines)
+        ACGT = "ACGT"
+        prolist = []
+        for seqname in [k for k in prof.keys() if sizes[k] > 1]: 
+            tbl = [l.split("\t") for l in prof[seqname]]
+            tbl = sorted(tbl, key=lambda x: int(x[0]))
+            seq = [ACGT[ np.argmax(x[2:6]) ] for x in tbl]
+            ambiguous = [np.where(np.array(x[2:6])==max(x[2:6]))[0].shape[0] > 1 for x in tbl]
+            seq = [x if not y else x.lower() for x,y in zip(seq, ambiguous)]
+            prolist.append([seqname, "".join(seq)])
+        df = pd.DataFrame(prolist, columns=['primer', 'profile'])
+        logger.info(f"Finished creating profile dataframe with {len(df)} rows")
+        return df
 
-    df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
-    #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
-    logger.info(f"Read {len(df)} primers from file {tsv}")
+    hash_name = '%012x' % random.randrange(16**12)
+    if scratch is None:
+        scratch = f"scratch_vsearch.{hash_name}"
+    if not os.path.exists(scratch):
+        pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # create scratch subdirectory
+        scratch_exists = False
+    else: scratch_exists = True
+
+    fastafile = os.path.join(scratch, f"primers.fasta")
+    ucfile = os.path.join(scratch, f"primers.uc")
+    consfile = os.path.join(scratch, f"consensus.fasta")
+    profile = os.path.join(scratch, f"profile.txt")
+    if nthreads < 1: nthreads = 1
     
-    df = kmer_clustering_dataframe (df, nthreads=nthreads)
-    logger.info(f"Clustering done, writing to file {output}.tsv")
-    df.to_csv (f"{output}.tsv", sep="\t", index=False)
+    with open_anyformat(fastafile, "w") as f:
+        for seq in df["primer"].tolist():
+            f.write(str(f">{seq}\n{seq}\n").encode())
 
-    df = subsample_primers (df, subsample=subsample)
-    primers = df["primer"].tolist()
-    primers = [str(i) for i in primers]
-    score_mat = create_NW_score_matrix_parallel (primers, nthreads=nthreads)
-    logger.info(f"Pairwise distances calculated; will now cluster primers")
-    distmat = score_to_distance_matrix_fraction (score_mat, mafft=True)
-    with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
-        cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
-    df["cluster"] = cl.labels_
-    logger.info(f"Clustering done, writing to file {output}.tsv")
-    df.to_csv (f"{output}.tsv", sep="\t", index=False)
+    # run vsearch and store centroids into unzipped tmpfile
+    runstr = f"vsearch --cluster_fast {fastafile} --minseqlength 8 --maxdiffs {maxdiffs} --maxgaps {maxgaps} " + \
+             f"--id {identity} --threads {nthreads} --uc {ucfile} --consout {consfile} --profile {profile}"
+    proc_run = subprocess.check_output(runstr, shell=(sys.platform!="win32"), universal_newlines=True)
+    # https://manpages.debian.org/stretch/vsearch/vsearch.1 : no headers, and first column is a hits (H), centroid (S), or cluster (C) info
+    vclus = pd.read_csv(ucfile, sep="\t", names=["rectype","v_cluster","primer"], usecols=[0,1,8]) 
+    vclus = vclus[vclus["rectype"].isin(["S","H"])] # keep only centroids and non-centroids (Hits), excluding summary "C"
+    vclus.drop("rectype", axis=1, inplace=True)
+    ## add (shorter) consensus info
+    vcons = df_from_consensus_fasta (consfile)
+    vclus = pd.merge(vclus, vcons, on="primer", how="left")
+    ## add (longer consensus) profile info
+    vprof = df_from_profile (profile)
+    vclus = pd.merge(vclus, vprof, on="primer", how="left")
 
-def kmer_clustering_dataframe_old (df):
-    primers = df["primer"].tolist()
-    df["frequency"] = df["frequency"].astype(int)
-    df["max_distance"] = df["max_distance"].astype(int)
-    df["penalty"] = df["penalty"].astype(float)
-    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+    # export consensus to all from same cluster
+    vclus["consensus"] = vclus.groupby("v_cluster")["consensus"].transform(lambda x: x.mode()[0] if x.notna().any() else np.nan) 
+    # export profile to all from same cluster (some clusters do not have a profile)
+    vclus["profile"] = vclus.groupby("v_cluster")["profile"].transform(lambda x: x.mode()[0] if x.notna().any() else np.nan)
+    vclus["profile"] = vclus["profile"].fillna(vclus["consensus"])
 
-    primers = [str(i) for i in primers]
-    kmers = [short_kmer(i,length = [4,7]) for i in primers]
-    logger.debug (f"Number of kmers: {len(kmers)}")
-    cluster_1 = cluster_short_kmers (kmers, threshold=0.75, element="min", use_centroid=False, jaccard=True)
-    n_clusters = len(set(cluster_1))
-    logger.debug (f"Number of clusters: {n_clusters}")
-    if n_clusters < len(primers)/100:
-        cluster_2 = cluster_short_kmers (kmers, threshold=0.9, element="max", use_centroid=False, jaccard=False)
-        n_clusters2 = len(set(cluster_2))
-        logger.debug (f"Number of overlap clusters: {n_clusters2} for too few clusters")
-        cluster_1 = consensus_clustering (cluster_1, cluster_2) # oversplits clusters
-        n_clusters2 = len(set(cluster_1))
-        logger.debug (f"Number of consensus clusters: {n_clusters2}")
-    elif n_clusters > len(primers)/2:
-        cluster_1 = cluster_short_kmers (kmers, threshold=0.6, use_centroid=True, element="min", jaccard=False)
-        n_clusters = len(set(cluster_1))
-        logger.debug (f"Number of overlap clusters: {n_clusters} for too many clusters")
-    
-    df["kmer_cluster"] = cluster_1
-    df = df.groupby("kmer_cluster").head(5)
-    return df
+    # delete tmp files
+    for file in [fastafile, ucfile, consfile, profile]:
+        pathlib.Path(file).unlink()
+    if not scratch_exists:
+        shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
+    orig_cols = df.columns.tolist()
+    vclus = vclus.merge(df, on="primer", how="left")
+    vclus = vclus[orig_cols + ["v_cluster", "consensus", "profile"]]
+    return vclus
+

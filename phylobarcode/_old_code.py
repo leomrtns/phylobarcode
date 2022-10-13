@@ -1,8 +1,67 @@
-#!/usr/bin/env python
-from phylobarcode.pb_common import *  ## better to have it in json?
-import copy
+### from task_cluster_primers.py
 
-logger = logging.getLogger("phylobarcode_global_logger")
+def cluster_primers_from_tsv_old (tsv = None, output = None, min_samples = 2, subsample=100, nthreads = 1):
+    if tsv is None: 
+        logger.error("No tsv file provided")
+        return
+    if output is None:
+        output = "clusters." + '%012x' % random.randrange(16**12) 
+        logger.warning (f"No output file specified, writing to file {output}.tsv")
+    if subsample < 1e-5: subsample = 1e-5
+    if subsample > 100: subsample = 100
+
+    df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
+    #df.set_index("primer", drop=False, inplace=True) # keep column with primer sequences
+    logger.info(f"Read {len(df)} primers from file {tsv}")
+    
+    df = kmer_clustering_dataframe (df, nthreads=nthreads)
+    logger.info(f"Clustering done, writing to file {output}.tsv")
+    df.to_csv (f"{output}.tsv", sep="\t", index=False)
+
+    df = subsample_primers (df, subsample=subsample)
+    primers = df["primer"].tolist()
+    primers = [str(i) for i in primers]
+    score_mat = create_NW_score_matrix_parallel (primers, nthreads=nthreads)
+    logger.info(f"Pairwise distances calculated; will now cluster primers")
+    distmat = score_to_distance_matrix_fraction (score_mat, mafft=True)
+    with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
+        cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
+    df["cluster"] = cl.labels_
+    logger.info(f"Clustering done, writing to file {output}.tsv")
+    df.to_csv (f"{output}.tsv", sep="\t", index=False)
+
+def kmer_clustering_dataframe_old (df):
+    primers = df["primer"].tolist()
+    df["frequency"] = df["frequency"].astype(int)
+    df["max_distance"] = df["max_distance"].astype(int)
+    df["penalty"] = df["penalty"].astype(float)
+    df = df.sort_values(by=["frequency","max_distance","penalty"], ascending=[False,True,True])
+
+    primers = [str(i) for i in primers]
+    kmers = [short_kmer(i,length = [4,7]) for i in primers]
+    logger.debug (f"Number of kmers: {len(kmers)}")
+    cluster_1 = cluster_short_kmers (kmers, threshold=0.75, element="min", use_centroid=False, jaccard=True)
+    n_clusters = len(set(cluster_1))
+    logger.debug (f"Number of clusters: {n_clusters}")
+    if n_clusters < len(primers)/100:
+        cluster_2 = cluster_short_kmers (kmers, threshold=0.9, element="max", use_centroid=False, jaccard=False)
+        n_clusters2 = len(set(cluster_2))
+        logger.debug (f"Number of overlap clusters: {n_clusters2} for too few clusters")
+        cluster_1 = consensus_clustering (cluster_1, cluster_2) # oversplits clusters
+        n_clusters2 = len(set(cluster_1))
+        logger.debug (f"Number of consensus clusters: {n_clusters2}")
+    elif n_clusters > len(primers)/2:
+        cluster_1 = cluster_short_kmers (kmers, threshold=0.6, use_centroid=True, element="min", jaccard=False)
+        n_clusters = len(set(cluster_1))
+        logger.debug (f"Number of overlap clusters: {n_clusters} for too many clusters")
+    
+    df["kmer_cluster"] = cluster_1
+    df = df.groupby("kmer_cluster").head(5)
+    return df
+
+### old version of kmer clustering, has several kmer sizes at once
+
+import copy
 
 class short_kmer:
     kmers = {}
@@ -104,3 +163,6 @@ def consensus_clustering (cluster_1, cluster_2):
     for i, c in enumerate(clusters):
         for j in c: idx[j] = i
     return idx
+
+
+####
