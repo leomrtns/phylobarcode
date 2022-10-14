@@ -102,13 +102,13 @@ def run_cluster_primers (args):
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     if len(args.tsv) < 2: ## "nargs='+'" always returns a list of at least one element (or None, but here it's positional)
         task_cluster.cluster_primers_from_tsv (tsv=args.tsv[0], output=args.prefix, min_samples = args.min_samples, 
-                subsample=args.subsample, kmer_length = args.kmer, threshold = args.threshold, n_best = args.n_best,
+                subsample=args.subsample, kmer_length = args.kmer, threshold = args.threshold, scratch=args.scratch,
                 nthreads=args.nthreads)
         return
     uniq = remove_prefix_suffix (args.tsv)
     for infile, outfile in zip (args.tsv, uniq):
         task_cluster.cluster_primers_from_tsv (tsv=infile, output=f"{args.prefix}_{outfile}", min_samples = args.min_samples, 
-                subsample=args.subsample, kmer_length = args.kmer, threshold = args.threshold, n_best = args.n_best,
+                subsample=args.subsample, kmer_length = args.kmer, threshold = args.threshold, scratch=args.scratch,
                 nthreads=args.nthreads)
     return
 
@@ -288,9 +288,8 @@ def main():
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('tsv', nargs="+", help="tsv files with primers (each ouput file from 'find_primers')")
     up_findp.add_argument('-k', '--kmer', type=int, default=5, help="kmer size for primer clustering (default=5)")
-    up_findp.add_argument('-t', '--threshold', type=float, default=0.5, 
-    help="threshold for primer clustering (default=0.5, should not be too high since there's a second clustering step)")
-    up_findp.add_argument('-b', '--n_best', type=int, default=-1, help="number of best primers from each cluster to keep (default=keep all)")
+    up_findp.add_argument('-t', '--threshold', type=float, default=0.95, 
+    help="threshold for primer clustering (default=0.95)")
     up_findp.add_argument('-s', '--subsample', metavar='float', type=float, default=100,
             help="subsample percentage of best primers to be clustered (default=100, i.e. all primers)")
     up_findp.add_argument('-m', '--min_samples', type=int, default=10, 

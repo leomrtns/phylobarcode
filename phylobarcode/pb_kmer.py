@@ -137,11 +137,14 @@ def cluster_single_kmers_parallel (sequences, length=None, threshold=None, jacca
     return idx, cluster_chunks[0], centroid_chunks[0]
 
 
-def map_clusters_to_indices (clusters, n_elements = None):
+def map_clusters_to_indices (clusters, n_elements = None, as_string = False):
     if n_elements is None: n_elements = max([max(c) for c in clusters]) + 1 
     idx = [None] * n_elements
     for i, c in enumerate(clusters):
-        for j in c: idx[j] = str(i)
+        if as_string: 
+            for j in c: idx[j] = str(i)
+        else:
+            for j in c: idx[j] = i
     return idx
 
 def consensus_clustering (cluster_1, cluster_2):
