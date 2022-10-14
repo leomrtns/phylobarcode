@@ -93,9 +93,7 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsa
     
     df = subsample_primers (df, subsample=subsample)
     df = cluster_primers_with_vsearch (df, nthreads = nthreads, scratch=scratch)
-    print (df)
     df = cluster_profiles_with_vsearch (df, nthreads = nthreads, scratch=scratch)
-    print (df)
 
     logger.info (f"Found {len(df['v_cluster'].unique())} clusters with vsearch; Will now cluster at similarity {threshold}")
     df = merge_vsearch_profiles (df, identity = threshold, nthreads = nthreads)
@@ -262,7 +260,7 @@ def vsearch_clustering_sequences (seqs, seqnames, maxdiffs=8, maxgaps=10, identi
             seq = [x if not y else x.lower() for x,y in zip(seq, ambiguous)]
             prolist.append([str(seqname), str("".join(seq))])
         df = pd.DataFrame(prolist, columns=['seqname', 'profile'])
-        logger.info(f"Finished creating profile dataframe with {len(df)} rows")
+        logger.info(f"Finished dataframe with {len(df)} longer profiles (other rows will receive consensus sequence)")
         return df
 
     hash_name = '%012x' % random.randrange(16**12)
@@ -291,6 +289,7 @@ def vsearch_clustering_sequences (seqs, seqnames, maxdiffs=8, maxgaps=10, identi
     vclus = pd.read_csv(ucfile, sep="\t", names=["rectype","v_cluster","seqname"], usecols=[0,1,8]) 
     vclus = vclus[vclus["rectype"].isin(["S","H"])] # keep only centroids and non-centroids (Hits), excluding summary "C"
     vclus.drop("rectype", axis=1, inplace=True)
+    vclus["v_cluster"] = vclus["v_cluster"].astype("string")
     ## add (shorter) consensus info
     vcons = df_from_consensus_fasta (consfile)
     vclus = pd.merge(vclus, vcons, on="seqname", how="left")
@@ -321,23 +320,19 @@ def pairwise_identity_matches (s1, s2, mode = "cdhit"):
     else:                x = (sim.length - sim.matches) / max (sim.len_query, sim.len_ref) # MBL: all gaps are counted (more strict)
     return x
 
-def merge_vsearch_profiles (df, identity=0.8, fasta_outfile = None, nthreads=1):
-    if fasta_outfile is None: 
-        fasta_outfile = "profiles." + '%012x' % random.randrange(16**12) + ".fasta.gz"
-        logger.warning(f"No output fasta file name provided; using {fasta_outfile}")
-
+def merge_vsearch_profiles (df, identity=0.8, nthreads=1):
     profiles = df["profile"].unique().tolist()
     logger.info(f"Starting to merge {len(profiles)} profiles")
     sequences = [re.sub("[a-z]", "N", str(x)) for x in profiles] # convert lowercase to N (ambiguous)
 
     idx = cluster_profiles_parallel (sequences, identity=identity, nthreads=nthreads)
-    df1 = pd.DataFrame({"cluster": idx, "profile": profiles})
+    df1 = pd.DataFrame({"cluster": idx, "profile": profiles}, dtype="string")
     logger.info(f"Finished merging {len(set(idx))} clusters")
     o_cols = df.columns.tolist()
     df = df.merge(df1, on="profile", how="left") ## all samples should have profile even if repeated
     df["cluster"] = df[["cluster", "v_cluster"]].agg("_".join, axis=1) # add vsearch cluster
-    df.drop("v_cluster", axis=1, inplace=True)
     df = df[o_cols + ["cluster"]] ## force order
+    df.drop("v_cluster", axis=1, inplace=True)
     return df
 
 def cluster_profiles (sequences, identity = 0.8):
