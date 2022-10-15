@@ -8,7 +8,7 @@ from sklearn import cluster
 
 ## TODO: fix task parameters
 
-# legacy code, no need to create a distinct stream
+# legacy logging code, no need to create a distinct stream
 # log_format = logging.Formatter(fmt='phylobarcode_clustr %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
 logger = logging.getLogger("phylobarcode_global_logger")
 
@@ -93,14 +93,28 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsa
     
     df = subsample_primers (df, subsample=subsample)
     df = cluster_primers_with_vsearch (df, nthreads = nthreads, scratch=scratch)
-    df = cluster_profiles_with_vsearch (df, nthreads = nthreads, scratch=scratch)
+    df = cluster_profiles_with_vsearch (df, nthreads = nthreads, simple_cluster_id = True, scratch=scratch)
 
-    logger.info (f"Found {len(df['v_cluster'].unique())} clusters with vsearch; Will now cluster at similarity {threshold}")
+    logger.info (f"Found {len(df['v_cluster'].unique())} clusters with vsearch; Will now cluster profiles at similarity {threshold}")
     df = merge_vsearch_profiles (df, identity = threshold, nthreads = nthreads)
+    df = reoder_dataframe_by_clusters (df)
     logger.info (f"Found {len(df['cluster'].unique())} clusters of vsearch profiles, writing to file {output}.tsv.xz")
     df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
     return
 
+def reorder_dataframe_by_clusters (df):
+    # python>=3.7 ensures order of dict keys is preserved; 
+    # some samples don't have GTDB info (thus no genus) but all have taxon, which comes from GFF file
+    sort_dic = {"genus_diversity":False,"taxon_diversity":False,"penalty":True,"frequency":False,"max_distance":True}
+    col_sort = [i for i in sort_dic.keys() if i in df.columns]
+    ord_sort = [sort_dic[i] for i in col_sort]
+    df = df.sort_values(by=col_sort, ascending=ord_sort)
+    df["clust_idx"] = df.groupby("cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
+    col_sort.insert(0,"clust_idx")
+    ord_sort.insert(0,True)
+    df = df.sort_values(by=col_sort, ascending=ord_sort)
+    df.drop(columns=["clust_idx"], inplace=True) # remove temporary column
+    return df
 
 def subsample_primers (df, subsample=100):
     if subsample >= 100: return df
@@ -140,65 +154,13 @@ def subsample_primers (df, subsample=100):
             ascending=[False,False,False,True,True])
     return df
 
-def find_centroids_from_file_vsearch (fastafile=None, output=None, identity=0.95, nthreads=1, scratch=None):
-    if fastafile is None:
-        logger.error("No fasta file provided")
-        return
-    if output is None:
-        output = "centroids." + '%012x' % random.randrange(16**12) + ".fasta.gz"
-        logger.warning (f"No output file specified, writing to file {output}")
-    if scratch is None:
-        scratch = "."
-        logger.warning (f"No scratch directory provided, writing to current directory")
-    if nthreads < 1: nthreads = 1
-    tmpfile = os.path.join(scratch, "tmp." + '%012x' % random.randrange(16**12) + ".fasta")
-    # run vsearch and store centroids into unzipped tmpfile
-    runstr = f"vsearch --cluster_fast {fastafile} --id {identity} --centroids {tmpfile} --threads {nthreads}"
-    proc_run = subprocess.check_output(runstr, shell=(sys.platform!="win32"), universal_newlines=True)
-    # gzip tmpfile into output file
-    with open(tmpfile, 'rb') as f_in, gzip.open(output, 'wb') as f_out: f_out.writelines(f_in)
-    # delete tmp file
-    pathlib.Path(tmpfile).unlink()
-
-# affinity propagation returns representatives, using similiarity matrix as input; birch needs features
-def find_representatives_from_sequences_optics (sequences=None, names=None, output=None, min_samples=2, nthreads=1):
-    if sequences is None:
-        logger.error("No sequences provided to OPTICS")
-        return
-    if names is None:
-        names = [f"seq{i}" for i in range(len(sequences))]
-    if output is None:
-        output = "representatives." + '%012x' % random.randrange(16**12) + ".fasta.gz"
-        logger.warning (f"No output file specified, writing to file {output}")
-    if (min_samples > len(sequences)//3): min_samples = len(sequences)//3
-    if (min_samples < 2): min_samples = 2
-
-    score_matrix = create_NW_score_matrix_parallel (sequences, nthreads=nthreads)
-    distmat = score_to_distance_matrix_fraction (score_matrix, maftt=True)
-    logger.info(f"Finished calculating pairwise scores; will now calculate OPTICS clusterings")
-    with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
-        cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
-
-    idx = [i for i,j in enumerate(cl.labels_) if j < 0] # all noisy points (negative labels) are representatives
-    cl = [[i,j,k,l] for i,(j,k,l) in enumerate(zip(cl.labels_, cl.reachability_, names))] # we have [index, label, reachability, name]
-    cl = [x for x in cl if x[1] >= 0] # excluding noisy seqs; we need one per cluster, with min reachability distance
-    cl = sorted(cl, key=lambda x: (x[1], x[2])) # sort by cluster label, breaking ties with reachability
-#    print ("\n".join(["\t".join(map(str,i)) for i in cl])) # DEBUG
-    cl = [list(v)[0] for k,v in itertools.groupby(cl, key=lambda x: x[1])] # groupby x[1] i.e. cluster label and return first element of each group
-    idx += [x[0] for x in cl] # add all cluster representatives to indx_1
-
-    # write representatives to file
-    with open_anyformat(output, "w") as f:
-        for i in idx:
-            f.write(str(f">{names[i]}\n{sequences[i]}\n").encode())
-    logger.info(f"Wrote {len(idx)} representatives to file {output}")
-
 def cluster_primers_with_vsearch (df, maxdiffs=8, maxgaps=10, identity=0.6, scratch = None, nthreads=1):
     orig_cols = df.columns.tolist()
     seqs = df["primer"].tolist()
     logger.info(f"Clustering {len(seqs)} primers with vsearch")
 
-    vclus = vsearch_clustering_sequences (seqs, seqs, maxdiffs=maxdiffs, maxgaps=maxgaps, identity=identity, scratch=scratch, nthreads=nthreads)
+    vclus = vsearch_clustering_sequences (seqs, seqs, maxdiffs=maxdiffs, maxgaps=maxgaps, identity=identity, scratch=scratch, 
+            drop_profile = False, nthreads=nthreads)
     vclus.rename(columns={"seqname":"primer"}, inplace=True) # "key" 
 
     for col in ["v_cluster", "profile", "consensus"]: # these columns should be new from vclus
@@ -206,27 +168,34 @@ def cluster_primers_with_vsearch (df, maxdiffs=8, maxgaps=10, identity=0.6, scra
     df = df.merge(vclus, on="primer", how="left")
     return df[orig_cols + ["v_cluster", "profile"]] ## maintain original order of columns, excluding "consensus"
 
-def cluster_profiles_with_vsearch (df, maxdiffs=8, maxgaps=10, identity=0.6, scratch = None, nthreads=1):
+def cluster_profiles_with_vsearch (df, maxdiffs=8, maxgaps=10, identity=0.6, scratch = None, simple_cluster_id = True, nthreads=1):
+    if identity < 0.1: identity = 0.1
+    if identity > 0.9999: identity = 0.9999
     orig_cols = df.columns.tolist()
     profiles = df["profile"].unique().tolist()
     logger.info(f"Clustering {len(profiles)} profiles with vsearch")
     sequences = [re.sub("[a-z]", "N", str(x)) for x in profiles] # convert lowercase to N (ambiguous)
     # vclus will have 4 columns: profile, consensus, seqname, v_cluster; we only need seqname (which is original profile) and v_cluster
-    vclus = vsearch_clustering_sequences (sequences, profiles, maxdiffs=maxdiffs, maxgaps=maxgaps, identity=identity, scratch=scratch, nthreads=nthreads)
-    vclus.drop(["profile", "consensus"], axis=1, inplace=True) # drop profile and consensus columns
+    vclus = vsearch_clustering_sequences (sequences, profiles, maxdiffs=maxdiffs, maxgaps=maxgaps, identity=identity, scratch=scratch, 
+            drop_profile = True, nthreads=nthreads)
+    vclus = vclus[["seqname", "v_cluster"]] # drop profile and consensus columns
     vclus.rename(columns={"seqname":"profile"}, inplace=True) # now we have "profile" and "v_cluster"
     # now we merge vclust with original df
     if "v_cluster" in orig_cols: df = df.rename(columns={"v_cluster":"v_cluster_prev"})
     df = df.merge(vclus, on="profile", how="left")
-    if "v_cluster" in orig_cols: 
-        df["v_cluster"] = df[["v_cluster", "v_cluster_prev"]].agg("_".join, axis=1) # newclust_oldclust
+    if "v_cluster" in orig_cols:
+        if simple_cluster_id is False: # cluster id will be newclust_oldclust; o.w. just newclust
+            df["v_cluster"] = df[["v_cluster", "v_cluster_prev"]].agg("_".join, axis=1) 
+        else:
+            df["v_cluster"] = df["v_cluster"].fillna(df["v_cluster_prev"] + "_") # NaNs should not happen?
         df.drop("v_cluster_prev", axis=1, inplace=True)
     else:
         orig_cols += ["v_cluster"]
     orig_cols = [x for x in orig_cols if x not in ["consensus"]] # remove consensus but keep new profiles 
     return df[orig_cols] ## maintain original order of columns
 
-def vsearch_clustering_sequences (seqs, seqnames, maxdiffs=8, maxgaps=10, identity=0.8, scratch = None, nthreads=1):
+def vsearch_clustering_sequences (seqs, seqnames, maxdiffs=8, maxgaps=10, identity=0.8, scratch = None, 
+        drop_profile=False, nthreads=1):
     '''
     still tends to oversplit (from 241k to 65k clusters with maxgaps=maxdiffs=30 and id=0.2)
     '''
@@ -290,25 +259,29 @@ def vsearch_clustering_sequences (seqs, seqnames, maxdiffs=8, maxgaps=10, identi
     vclus = vclus[vclus["rectype"].isin(["S","H"])] # keep only centroids and non-centroids (Hits), excluding summary "C"
     vclus.drop("rectype", axis=1, inplace=True)
     vclus["v_cluster"] = vclus["v_cluster"].astype("string")
-    ## add (shorter) consensus info
+    ## add (shorter) consensus info (fast to calculate and needed even in absence of profile)
     vcons = df_from_consensus_fasta (consfile)
     vclus = pd.merge(vclus, vcons, on="seqname", how="left")
-    ## add (longer consensus) profile info
-    vprof = df_from_profile (profile)
-    vclus = pd.merge(vclus, vprof, on="seqname", how="left")
-
     # export consensus to all from same cluster
     vclus["consensus"] = vclus.groupby("v_cluster")["consensus"].transform(lambda x: x.mode()[0] if x.notna().any() else np.nan) 
-    # export profile to all from same cluster (some clusters do not have a profile)
-    vclus["profile"] = vclus.groupby("v_cluster")["profile"].transform(lambda x: x.mode()[0] if x.notna().any() else np.nan)
-    vclus["profile"] = vclus["profile"].fillna(vclus["consensus"])
+
+    ## add (longer consensus) profile info
+    if drop_profile is False:
+        vprof = df_from_profile (profile)
+        vclus = pd.merge(vclus, vprof, on="seqname", how="left")
+        # export profile to all from same cluster (some clusters do not have a profile)
+        vclus["profile"] = vclus.groupby("v_cluster")["profile"].transform(lambda x: x.mode()[0] if x.notna().any() else np.nan)
+        vclus["profile"] = vclus["profile"].fillna(vclus["consensus"])
+        vclus.drop("consensus", axis=1, inplace=True)
+    else:
+        vclus.rename(columns={"consensus": "profile"}, inplace=True)
 
     # delete tmp files
     for file in [fastafile, ucfile, consfile, profile]:
         pathlib.Path(file).unlink()
     if not scratch_exists:
         shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
-    return vclus ## will have 4 columns: seqname, v_cluster, consensus, profile
+    return vclus ## will have 3 columns: seqname, v_cluster, profile
 
 def pairwise_identity_matches (s1, s2, mode = "cdhit"):
     '''
@@ -341,10 +314,9 @@ def cluster_profiles (sequences, identity = 0.8):
     for i in range (n_seqs):
         for cl in clusters:
             if pairwise_identity_matches (sequences[i], sequences[cl[0]]) >= identity:
-                if len(sequence[i]) > len(sequences[cl[0]]):
-                    cl.insert(0, i) # first position will be the longest sequence
-                else:
-                    cl.append (i)
+                # first position will be the longest sequence
+                if len(sequence[i]) > len(sequences[cl[0]]): cl.insert(0, i) 
+                else: cl.append (i)
                 break
         else:
             clusters.append ([i])
@@ -361,7 +333,6 @@ def cluster_pair_of_profile_clusters (cluster_pair, sequences, identity = 0.8):
                 break
         else:
             cluster_pair[0].append (c1)
-
     return cluster_pair[0]
 
 def cluster_profiles_parallel (sequences, identity = 0.8, nthreads = 1):
@@ -382,5 +353,60 @@ def cluster_profiles_parallel (sequences, identity = 0.8, nthreads = 1):
                 zip(cluster_chunks, cluster_chunks[nt:]))
             if len(cluster_chunks) % 2 == 1: results.append (cluster_chunks[nt-1])
             cluster_chunks = results
-
     return map_clusters_to_indices (cluster_chunks[0], n_elements = n_seqs)
+
+
+###    for cluster_flanks_from_fasta
+
+def find_centroids_from_file_vsearch (fastafile=None, output=None, identity=0.95, nthreads=1, scratch=None):
+    if fastafile is None:
+        logger.error("No fasta file provided")
+        return
+    if output is None:
+        output = "centroids." + '%012x' % random.randrange(16**12) + ".fasta.gz"
+        logger.warning (f"No output file specified, writing to file {output}")
+    if scratch is None:
+        scratch = "."
+        logger.warning (f"No scratch directory provided, writing to current directory")
+    if nthreads < 1: nthreads = 1
+    tmpfile = os.path.join(scratch, "tmp." + '%012x' % random.randrange(16**12) + ".fasta")
+    # run vsearch and store centroids into unzipped tmpfile
+    runstr = f"vsearch --cluster_fast {fastafile} --id {identity} --centroids {tmpfile} --threads {nthreads}"
+    proc_run = subprocess.check_output(runstr, shell=(sys.platform!="win32"), universal_newlines=True)
+    # gzip tmpfile into output file
+    with open(tmpfile, 'rb') as f_in, gzip.open(output, 'wb') as f_out: f_out.writelines(f_in)
+    # delete tmp file
+    pathlib.Path(tmpfile).unlink()
+
+# affinity propagation returns representatives, using similiarity matrix as input; birch needs features
+def find_representatives_from_sequences_optics (sequences=None, names=None, output=None, min_samples=2, nthreads=1):
+    if sequences is None:
+        logger.error("No sequences provided to OPTICS")
+        return
+    if names is None:
+        names = [f"seq{i}" for i in range(len(sequences))]
+    if output is None:
+        output = "representatives." + '%012x' % random.randrange(16**12) + ".fasta.gz"
+        logger.warning (f"No output file specified, writing to file {output}")
+    if (min_samples > len(sequences)//3): min_samples = len(sequences)//3
+    if (min_samples < 2): min_samples = 2
+
+    score_matrix = create_NW_score_matrix_parallel (sequences, nthreads=nthreads)
+    distmat = score_to_distance_matrix_fraction (score_matrix, maftt=True)
+    logger.info(f"Finished calculating pairwise scores; will now calculate OPTICS clusterings")
+    with np.errstate(divide='ignore'): # silence OPTICS warning (https://stackoverflow.com/a/59405142/204903)
+        cl = cluster.OPTICS(min_samples=min_samples, min_cluster_size=2, metric="precomputed", n_jobs=nthreads).fit(distmat)
+
+    idx = [i for i,j in enumerate(cl.labels_) if j < 0] # all noisy points (negative labels) are representatives
+    cl = [[i,j,k,l] for i,(j,k,l) in enumerate(zip(cl.labels_, cl.reachability_, names))] # we have [index, label, reachability, name]
+    cl = [x for x in cl if x[1] >= 0] # excluding noisy seqs; we need one per cluster, with min reachability distance
+    cl = sorted(cl, key=lambda x: (x[1], x[2])) # sort by cluster label, breaking ties with reachability
+#    print ("\n".join(["\t".join(map(str,i)) for i in cl])) # DEBUG
+    cl = [list(v)[0] for k,v in itertools.groupby(cl, key=lambda x: x[1])] # groupby x[1] i.e. cluster label and return first element of each group
+    idx += [x[0] for x in cl] # add all cluster representatives to indx_1
+
+    # write representatives to file
+    with open_anyformat(output, "w") as f:
+        for i in idx:
+            f.write(str(f">{names[i]}\n{sequences[i]}\n").encode())
+    logger.info(f"Wrote {len(idx)} representatives to file {output}")

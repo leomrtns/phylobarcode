@@ -1,11 +1,11 @@
 from pathlib    import Path
 import setuptools 
 import sys
-min_version = (3, 8)
+min_version = (3, 7)
 
 if sys.version_info < min_version:
     error = """
-Python {0} or above is required.
+Python {0} or above is required (we assume that dict() preserves order, for instance)
 
 Make sure you have an up-to-date pip installed.  
 """.format('.'.join(str(n) for n in min_version)), sys.exit(error)
@@ -60,6 +60,7 @@ setuptools.setup(
         "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
         # Python 3 only
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10", # conda does not have parasail-python for py3.10, only 3.9...
