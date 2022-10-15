@@ -97,7 +97,7 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsa
 
     logger.info (f"Found {len(df['v_cluster'].unique())} clusters with vsearch; Will now cluster profiles at similarity {threshold}")
     df = merge_vsearch_profiles (df, identity = threshold, nthreads = nthreads)
-    df = reoder_dataframe_by_clusters (df)
+    df = reorder_dataframe_by_clusters (df)
     logger.info (f"Found {len(df['cluster'].unique())} clusters of vsearch profiles, writing to file {output}.tsv.xz")
     df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
     return
