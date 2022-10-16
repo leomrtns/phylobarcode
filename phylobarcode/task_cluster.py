@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 from phylobarcode.pb_common import *  ## better to have it in json?
-from phylobarcode.pb_kmer import * 
+from phylobarcode.pb_kmer import *   ## map_clusters_to_indices() 
 import pandas as pd, numpy as np
 import itertools, pathlib, shutil, gzip, parasail
 from Bio import pairwise2
 from sklearn import cluster
 
-## TODO: fix task parameters
+## TODO: subsample with both quantile (to purge really bad samples) and then get best N samples. Thus it would be
+# intersection but with high subsample percenteage
 
 # legacy logging code, no need to create a distinct stream
 # log_format = logging.Formatter(fmt='phylobarcode_clustr %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
@@ -65,8 +66,7 @@ def cluster_flanks_from_fasta (fastafile = None, border = 400, output = None, id
     logger.info (f"Finished. Reduced sequence sets saved to files {ofile_centroid[0]} and {ofile_centroid[1]};")
     return
     
-def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsample=100, kmer_length = 5, 
-        threshold = 0.7, scratch = None, nthreads=1):
+def cluster_primers_from_tsv (tsv = None, output = None, subsample=100, threshold = 0.7, scratch = None, nthreads=1):
     if tsv is None: 
         logger.error("No tsv file provided")
         return
@@ -76,11 +76,8 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsa
     if scratch is None:
         scratch = "scratch." + '%012x' % random.randrange(16**12) 
         logger.warning (f"No scratch directory specified, writing to directory {scratch}")
-    if min_samples < 3: min_samples = 3
     if subsample < 1e-3: subsample = 1e-3
     if subsample > 100: subsample = 100
-    if kmer_length < 3: kmer_length = 3
-    if kmer_length > 18: kmer_length = 18
     if threshold < 0.01: threshold = 0.01
     if threshold > 1: threshold = 1
     if nthreads < 1: nthreads = 1
@@ -94,11 +91,30 @@ def cluster_primers_from_tsv (tsv = None, output = None, min_samples = 10, subsa
     df = subsample_primers (df, subsample=subsample)
     df = cluster_primers_with_vsearch (df, nthreads = nthreads, scratch=scratch)
     df = cluster_profiles_with_vsearch (df, nthreads = nthreads, simple_cluster_id = True, scratch=scratch)
+    df.to_csv (f"{output}_0.tsv.xz", sep="\t", index=False, compression="xz")
 
     logger.info (f"Found {len(df['v_cluster'].unique())} clusters with vsearch; Will now cluster profiles at similarity {threshold}")
     df = merge_vsearch_profiles (df, identity = threshold, nthreads = nthreads)
     df = reorder_dataframe_by_clusters (df)
     logger.info (f"Found {len(df['cluster'].unique())} clusters of vsearch profiles, writing to file {output}.tsv.xz")
+    df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
+    return
+
+def subsample_primers_from_tsv (tsv = None, output = None, subsample=100, n_elements=None):
+    if tsv is None: 
+        logger.error("No tsv file provided")
+        return
+    if output is None:
+        output = "subsample." + '%012x' % random.randrange(16**12) 
+        logger.warning (f"No output file specified, writing to file {output}.tsv.xz")
+    if subsample < 1e-5: subsample = 1e-5
+    if subsample > 100: subsample = 100
+
+    df = pd.read_csv (tsv, compression="infer", sep="\t", dtype='unicode')
+    logger.info(f"Read {len(df)} primers from file {tsv}")
+    
+    df = subsample_primers (df, subsample=subsample, n_elements=n_elements)
+    logger.info (f"Writing {len(df)} primers to file {output}.tsv.xz")
     df.to_csv (f"{output}.tsv.xz", sep="\t", index=False)
     return
 
@@ -108,50 +124,83 @@ def reorder_dataframe_by_clusters (df):
     sort_dic = {"genus_diversity":False,"taxon_diversity":False,"penalty":True,"frequency":False,"max_distance":True}
     col_sort = [i for i in sort_dic.keys() if i in df.columns]
     ord_sort = [sort_dic[i] for i in col_sort]
-    df = df.sort_values(by=col_sort, ascending=ord_sort)
+    df = df.sort_values(by=col_sort, ascending=ord_sort, ignore_index=True)
     df["clust_idx"] = df.groupby("cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
     col_sort.insert(0,"clust_idx")
     ord_sort.insert(0,True)
-    df = df.sort_values(by=col_sort, ascending=ord_sort)
+    df = df.sort_values(by=col_sort, ascending=ord_sort, ignore_index=True)
     df.drop(columns=["clust_idx"], inplace=True) # remove temporary column
     return df
 
-def subsample_primers (df, subsample=100):
-    if subsample >= 100: return df
-    logger.info (f"Subsampling {len(df)} primers to {subsample:.2f}% of the original set over frequencies, distance, and penalty (from primer3)")
+def subsample_primers (df, subsample=100, n_elements=None):
+    if n_elements is None: n_elements = len(df)
+    if n_elements < 1.: n_elements = int(len(df) * n_elements)
+    else: n_elements = int(n_elements)
+    if n_elements < 2: n_elements = 2
+    if n_elements > len(df): n_elements = len(df)
+
+    subsample_percentage = subsample ## copy original integer
     subsample /= 100 # pandas percentile uses 0-1 scale
-    df["genus_diversity"] = df["genus_diversity"].astype(int)
-    df["taxon_diversity"] = df["taxon_diversity"].astype(int)
-    df["frequency"] = df["frequency"].astype(int)
-    df["max_distance"] = df["max_distance"].astype(int)
-    df["penalty"] = df["penalty"].astype(float)
-    threshold = {
-        "genus_diversity": df["genus_diversity"].quantile(1. - subsample), # always smaller than taxon_diversity
-        "taxon_diversity": df["taxon_diversity"].quantile(1. - subsample),
-        "frequency": df["frequency"].quantile(1. - subsample), # quantile goes from min to max, thus we want 100-x% smallest value
-        "max_distance": df["max_distance"].quantile(subsample),
-        "penalty": df["penalty"].quantile(subsample)
-        }
-    max_div = df["taxon_diversity"].max() # if GTDB file was not given then all have {taxon/genus}_diversity = 1
-    if threshold["taxon_diversity"] > 1: # all primers have freq at least one thus all would be chosen  
-        df = df[(df["taxon_diversity"] >= threshold["taxon_diversity"]) | 
-                (df["genus_diversity"] >= threshold["genus_diversity"]) | # genus_diversity is too strict, used only here
-                (df["frequency"] >= threshold["frequency"]) | 
-                (df["max_distance"] < threshold["max_distance"]) |
-                (df["penalty"] < threshold["penalty"])]
-    elif max_div <= 1: # taxonomic info probably missing when finding primers; must neglect this column
-        df = df[(df["frequency"] >= threshold["frequency"]) |
-                (df["max_distance"] < threshold["max_distance"]) |
-                (df["penalty"] < threshold["penalty"])]
-    else: # max diversity is > 1 however threshold is 1, thus all primers would have been chosen
-        df = df[(df["taxon_diversity"] > 1) | # OR large diversity OR taxon_div=1 but small distance or penalty
-                ((df["frequency"] >= threshold["frequency"]) & 
-                 (df["max_distance"] < threshold["max_distance"]) &
-                 (df["penalty"] < threshold["penalty"]))]
-    logger.info (f"Subsampling done, {len(df)} primers kept using thresholds {threshold}")
-    df = df.sort_values(
-            by=["genus_diversity","taxon_diversity","frequency","max_distance","penalty"], 
-            ascending=[False,False,False,True,True])
+    logger.info (f"Subsampling {len(df)} primers based on taxonomic and clustering diversity, primer length, penalty (from primer3)")
+
+    df["primer_length"] = df["primer"].str.len()
+    ## setting types and finding quantile thresholds
+    col_info = {
+            "genus_diversity":{"type":"Int64","quantile":1-subsample, "sort":False},
+            "taxon_diversity":{"type":"Int64","quantile":1-subsample, "sort":False},
+            "primer_length":{"type":"Int64","quantile":1-subsample, "sort":False},
+            "penalty":{"type":"float64","quantile":subsample, "sort":True},
+            "frequency":{"type":"Int64","quantile":1-subsample, "sort":False},
+            "max_distance":{"type":"Int64","quantile":subsample, "sort":True},
+            }
+    for col in [i for i in col_info.keys() if i in df.columns]:
+        df[col] = df[col].astype(col_info[col]["type"])
+        col_info[col]["threshold"] = df[col].quantile(col_info[col]["quantile"])
+
+    ## sorting columns and creating a "cluster diversit" column to avoid same cluster consecutively
+    col_present = [i for i in col_info.keys() if i in df.columns] # used only for sorting
+    col_sortord = [col_info[i]["sort"] for i in col_present]
+    df = df.sort_values(by=col_present, ascending=col_sortord, ignore_index=True) # new index will be of sorted df
+    if "cluster" in df.columns:
+        df["clust_idx"] = df.groupby("cluster").cumcount() # idx = 1 best, idx = 2 second best, etc.
+        col_present.insert(0,"clust_idx") ## add cluster diversity as first column to be sorted
+        col_sortord.insert(0,True)
+        df = df.sort_values(by=col_present, ascending=col_sortord, ignore_index=True)  # sort again, now using cluster diversity
+    logger.info (f"Reordering dataframe done")
+
+    if subsample_percentage < 100:
+        # max_div = df["taxon_diversity"].max() # if GTDB file was not given then all have {taxon/genus}_diversity = 1
+        subprimer_sets = []
+        infotext = ""
+        for col in [i for i in col_info.keys() if i in df.columns]:
+            if col_info[col]["sort"] == True: # penalty, max_distance we want smallest
+                x = set(df.loc[df[col] < col_info[col]["threshold"], "primer"].tolist())
+                infotext += f"{col} < {round(col_info[col]['threshold'],3)}: {len(x)} primers, "
+                if len(x) > 0.9 * subsample: subprimer_sets.append(x) # o.w. too strict
+            else:
+                x = set(df.loc[df[col] >= col_info[col]["threshold"], "primer"].tolist())
+                infotext += f"{col} >= {round(col_info[col]['threshold'],3)}: {len(x)} primers, "
+                if len(x) > 0.9 * subsample: subprimer_sets.append(x)
+        subprimers = set.intersection(*subprimer_sets) # asterisk unpacks list into arguments
+        logger.info (f"Quantile-based subsampling finished ({len(subprimers)} primers) using thresholds {infotext}")
+        if (len(subprimers) > 0): df = df[df["primer"].isin(subprimers)] # easier than concat() or first_combine() ?
+        else: 
+            subprimers = set.union(*subprimer_sets)
+            logger.info (f"Quantile-based multivariate subsampling failed, trying union of primers (i.e. univariate " +
+            f"subsampling), leading to {len(subprimers)} primers")
+            if len(subprimers) > 0 and len(subprimers) < len(df): df = df[df["primer"].isin(subprimers)]
+            else:
+                logger.warning (f"Quantile-based univariate subsampling failed, will use all ordered best primers")
+
+    if n_elements < len(df):
+        initial_length = len(df)
+        df = df.iloc[:n_elements] ## relies on index being sorted
+        logger.info (f"Best primers subsampling finished, {len(df)} primers kept, out of {initial_length}")
+
+    ## remove temporary columns
+    if "clust_idx" in df.columns:
+        df.drop(columns=["clust_idx"], inplace=True)
+    df.drop(columns=["primer_length"], inplace=True)
     return df
 
 def cluster_primers_with_vsearch (df, maxdiffs=8, maxgaps=10, identity=0.6, scratch = None, nthreads=1):
@@ -178,11 +227,14 @@ def cluster_profiles_with_vsearch (df, maxdiffs=8, maxgaps=10, identity=0.6, scr
     # vclus will have 4 columns: profile, consensus, seqname, v_cluster; we only need seqname (which is original profile) and v_cluster
     vclus = vsearch_clustering_sequences (sequences, profiles, maxdiffs=maxdiffs, maxgaps=maxgaps, identity=identity, scratch=scratch, 
             drop_profile = True, nthreads=nthreads)
-    vclus = vclus[["seqname", "v_cluster"]] # drop profile and consensus columns
-    vclus.rename(columns={"seqname":"profile"}, inplace=True) # now we have "profile" and "v_cluster"
+
+    vclus.rename(columns={"seqname":"profile_key"}, inplace=True) # now we have "profile", "v_cluster", "profile_key" (to match df) 
+    df.rename(columns={"profile":"profile_key"}, inplace=True) # rename profile to profile_key to match vclus
     # now we merge vclust with original df
     if "v_cluster" in orig_cols: df = df.rename(columns={"v_cluster":"v_cluster_prev"})
-    df = df.merge(vclus, on="profile", how="left")
+    df = df.merge(vclus, on="profile_key", how="left")
+    df.drop(columns=["profile_key"], inplace=True) # drop profile_key, we don't need it anymore
+
     if "v_cluster" in orig_cols:
         if simple_cluster_id is False: # cluster id will be newclust_oldclust; o.w. just newclust
             df["v_cluster"] = df[["v_cluster", "v_cluster_prev"]].agg("_".join, axis=1) 
@@ -197,6 +249,7 @@ def cluster_profiles_with_vsearch (df, maxdiffs=8, maxgaps=10, identity=0.6, scr
 def vsearch_clustering_sequences (seqs, seqnames, maxdiffs=8, maxgaps=10, identity=0.8, scratch = None, 
         drop_profile=False, nthreads=1):
     '''
+    Returns a dataframe with 3 columns: seqname, v_cluster, profile
     still tends to oversplit (from 241k to 65k clusters with maxgaps=maxdiffs=30 and id=0.2)
     '''
     def df_from_consensus_fasta (fasfile):
@@ -287,7 +340,7 @@ def pairwise_identity_matches (s1, s2, mode = "cdhit"):
     '''
     identity based on number of matches (https://manpages.debian.org/stretch/vsearch/vsearch.1)
     '''
-    sim = parasail.sg_stats_striped_16(s1, s2, 10, 1, parasail.pam10)
+    sim = parasail.sg_stats_striped_16(s1, s2, 14, 1, parasail.pam10)
     if mode == "cdhit":  x = sim.matches / min(sim.len_query, sim.len_ref) # CD-HIT similarity (always larger than others)
     elif mode == "edit": x = sim.matches / sim.length # edit distance (larger than MBL but lower than CD-HIT)
     else:                x = (sim.length - sim.matches) / max (sim.len_query, sim.len_ref) # MBL: all gaps are counted (more strict)
@@ -410,3 +463,44 @@ def find_representatives_from_sequences_optics (sequences=None, names=None, outp
         for i in idx:
             f.write(str(f">{names[i]}\n{sequences[i]}\n").encode())
     logger.info(f"Wrote {len(idx)} representatives to file {output}")
+
+## old functions
+
+def subsample_primers_old (df, subsample=100):
+    if subsample >= 100: return df
+    logger.info (f"Subsampling {len(df)} primers to {subsample:.2f}% of the original set over frequencies, distance, and penalty (from primer3)")
+    subsample /= 100 # pandas percentile uses 0-1 scale
+    df["genus_diversity"] = df["genus_diversity"].astype(int)
+    df["taxon_diversity"] = df["taxon_diversity"].astype(int)
+    df["frequency"] = df["frequency"].astype(int)
+    df["max_distance"] = df["max_distance"].astype(int)
+    df["penalty"] = df["penalty"].astype(float)
+    threshold = {
+        "genus_diversity": df["genus_diversity"].quantile(1. - subsample), # always smaller than taxon_diversity
+        "taxon_diversity": df["taxon_diversity"].quantile(1. - subsample),
+        "frequency": df["frequency"].quantile(1. - subsample), # quantile goes from min to max, thus we want 100-x% smallest value
+        "max_distance": df["max_distance"].quantile(subsample),
+        "penalty": df["penalty"].quantile(subsample)
+        }
+    max_div = df["taxon_diversity"].max() # if GTDB file was not given then all have {taxon/genus}_diversity = 1
+    if threshold["taxon_diversity"] > 1: # all primers have freq at least one thus all would be chosen  
+        df = df[(df["taxon_diversity"] >= threshold["taxon_diversity"]) | 
+                (df["genus_diversity"] >= threshold["genus_diversity"]) | # genus_diversity is too strict, used only here
+                (df["frequency"] >= threshold["frequency"]) | 
+                (df["max_distance"] < threshold["max_distance"]) |
+                (df["penalty"] < threshold["penalty"])]
+    elif max_div <= 1: # taxonomic info probably missing when finding primers; must neglect this column
+        df = df[(df["frequency"] >= threshold["frequency"]) |
+                (df["max_distance"] < threshold["max_distance"]) |
+                (df["penalty"] < threshold["penalty"])]
+    else: # max diversity is > 1 however threshold is 1, thus all primers would have been chosen
+        df = df[(df["taxon_diversity"] > 1) | # OR large diversity OR taxon_div=1 but small distance or penalty
+                ((df["frequency"] >= threshold["frequency"]) & 
+                 (df["max_distance"] < threshold["max_distance"]) &
+                 (df["penalty"] < threshold["penalty"]))]
+    logger.info (f"Subsampling done, {len(df)} primers kept using thresholds {threshold}")
+    df = df.sort_values(
+            by=["genus_diversity","taxon_diversity","frequency","max_distance","penalty"], 
+            ascending=[False,False,False,True,True], 
+            ignore_index=True)
+    return df

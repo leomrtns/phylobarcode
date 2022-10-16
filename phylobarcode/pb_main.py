@@ -101,15 +101,28 @@ def run_cluster_primers (args):
     generate_prefix_for_task (args, "cluster")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     if len(args.tsv) < 2: ## "nargs='+'" always returns a list of at least one element (or None, but here it's positional)
-        task_cluster.cluster_primers_from_tsv (tsv=args.tsv[0], output=args.prefix, min_samples = args.min_samples, 
-                subsample=args.subsample, kmer_length = args.kmer, threshold = args.threshold, scratch=args.scratch,
+        task_cluster.cluster_primers_from_tsv (tsv=args.tsv[0], output=args.prefix, 
+                subsample=args.subsample, threshold = args.threshold, scratch=args.scratch,
                 nthreads=args.nthreads)
         return
     uniq = remove_prefix_suffix (args.tsv)
     for infile, outfile in zip (args.tsv, uniq):
-        task_cluster.cluster_primers_from_tsv (tsv=infile, output=f"{args.prefix}_{outfile}", min_samples = args.min_samples, 
-                subsample=args.subsample, kmer_length = args.kmer, threshold = args.threshold, scratch=args.scratch,
+        task_cluster.cluster_primers_from_tsv (tsv=infile, output=f"{args.prefix}_{outfile}", 
+                subsample=args.subsample, threshold = args.threshold, scratch=args.scratch,
                 nthreads=args.nthreads)
+    return
+
+def run_subsample_primers (args):
+    from phylobarcode import task_cluster
+    generate_prefix_for_task (args, "subsample")
+    if len(args.tsv) < 2:
+        task_cluster.subsample_primers_from_tsv (tsv=args.tsv[0], output=args.prefix, 
+                subsample=args.subsample, n_elements = args.n_primers)
+        return
+    uniq = remove_prefix_suffix (args.tsv)
+    for infile, outfile in zip (args.tsv, uniq):
+        task_cluster.subsample_primers_from_tsv (tsv=infile, output=f"{args.prefix}_{outfile}", 
+                subsample=args.subsample, n_elements = args.n_primers)
     return
 
 def run_blast_primers (args):
@@ -278,28 +291,61 @@ def main():
     this_help = "Cluster primers described in tsv file, adding a column to table with cluster number."
     extra_help= '''\n
     If several tsv files are given, default output files will keep their unique names (i.e. without common prefix or
-    suffix). A rough kmer-based (canopy) clustering is done, and for each canopy the OPTICS algorithm is used to cluster primers.
+    suffix). 
 
-    If subsample percentage is given, then only "best" primers are considered, based on frequenct, longest distance of
-    primer to border, and penalty score as given by primer3. 
+    If subsample percentage is given, then only "best" primers are considered from the beginning, based on genus/taxon
+    frequency where primer was found, longest distance of primer to border, and penalty score as given by primer3.
+    The subsample percentage should be close to 100 (percent) here. If you want to subsample _after_ clustering, then
+    use `subsample_primers` afterwards. It is strongly suggested to cluster primers before subsampling (thus do not
+    change the default value of `-s` or `--subsample` here unless you have too many primers to cluster).
+
+    The cluster is based on vsearch, which is very fast but overestimates the number of clusters. Since it provides a
+    profile for each cluster, we can use this to further cluster the profiles (as an extended consensus sequence) and
+    try to reduce the number of clusters. Finally the profiles clusters are merged through single-linkage, and the final
+    cluster IDs will be "id(single-likage)_id(profile)". Thus we may have `0_1` and `0_2` clusters, meaning that their
+    profiles are `1` and `2`, but they are connected through single-linkage. The threshold controls the single linkage
+    step, since it has little effect on the vsearch-based clusterings. This threshold can be a low value since it just
+    marks similar clusters --- the total number of clusters will be given by the vsearch profile clustering.
+
     The input tsv files here should be the output of `find_primers`.
     '''
     up_findp = subp.add_parser('cluster_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('tsv', nargs="+", help="tsv files with primers (each ouput file from 'find_primers')")
-    up_findp.add_argument('-k', '--kmer', type=int, default=5, help="kmer size for primer clustering (default=5)")
-    up_findp.add_argument('-t', '--threshold', type=float, default=0.95, 
-    help="threshold for primer clustering (default=0.95)")
+#    up_findp.add_argument('-k', '--kmer', type=int, default=5, help="kmer size for primer clustering (default=5)")
+    up_findp.add_argument('-t', '--threshold', type=float, default=0.8, help="threshold for primer clustering (default=0.8)")
     up_findp.add_argument('-s', '--subsample', metavar='float', type=float, default=100,
             help="subsample percentage of best primers to be clustered (default=100, i.e. all primers)")
-    up_findp.add_argument('-m', '--min_samples', type=int, default=10, 
-            help="minimum number of elements in rough k-mer clustering for further clustering (default=10; should be larger than 3)")
     up_findp.set_defaults(func = run_cluster_primers)
+
+    this_help = "Subsample primers from tsv file, keeping only the best ones based on clustering and taxonomic frequency."
+    extra_help= '''\n
+    The input tsv files here should be the output of `cluster_primers`. If possible (i.e. you have a manageable number
+    of primers), use this command to subsample only _after_ clustering (since it can use the clustering information to
+    maximilse the diversity of primers).
+    This command can use a subsample percentage (with `-s` or `--subsample`) or a number of primers to keep (with `-n` or `--n_primers`).
+    When using the percentage option, the univariate quantile of each variable is used, before finding the best primers
+    according to _all_ variables. Thus the total number of primers will likely be (quite) smaller than the percentage given.
+    If you just want the best N primers (using the same variables), then use the `-n` or `--n_primers` option.
+    The variables used are the same as in `cluster_primers`, however the cluster ID is taken into account such that
+    distinct clusters are preferred.  The other variables include the number of genera/taxa/sequences where primer was
+    found, longest distance of primer to border, primer length, and penalty score as given by primer3.
+
+    If both `-s` and `-n` are given, then the number of primers (`-n`) is used and the percentage (`-s`) is ignored.
+    '''
+    up_findp = subp.add_parser('subsample_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser],
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('tsv', nargs="+", help="tsv files with primers (each ouput file from 'cluster_primers')")
+    up_findp.add_argument('-s', '--subsample', metavar='float', type=float, default=100,
+            help="quantile percentage of best primers to be clustered (default=100, i.e. all primers)")
+    up_findp.add_argument('-n', '--n_primers', metavar='int/float', type=float, default=None,
+            help="number (or proportions if < 1) of primers to keep (default is to ignore this and use subsample percentage)")
+    up_findp.set_defaults(func = run_subsample_primers)
 
     this_help = "Blast primers against database, checking for left-right pairs."
     extra_help= '''\n
     Needs exactly two tsv files, with left and right primers respectively. These tsv files should be the output of
-    `find_primers` or `cluster_primers`. 
+    `find_primers`, `cluster_primers`, or `subsample_primers`. 
     Optionally you can give the merged tsv file from `merge_fasta_gff` to use taxonomy information of hits
     Output files will keep their unique names (i.e. without common prefix or suffix)
     Can use multiple threads within each BLAST job, or to create several concurrent BLAST jobs.
@@ -307,7 +353,7 @@ def main():
     up_findp = subp.add_parser('blast_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser], 
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
     up_findp.add_argument('tsv', nargs=2, 
-            help="tsv files with left and right primers, respectively (out from 'find_primers' or 'cluster_primers')")
+            help="tsv files with left and right primers, respectively (out from 'find_primers', 'cluster_primers', or 'subsample_primers')")
     up_findp.add_argument('-d', '--database', required=True, 
             help="full path to database prefix")
     up_findp.add_argument('-e', '--evalue', type=float, default=1., 
