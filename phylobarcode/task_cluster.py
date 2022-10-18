@@ -91,7 +91,6 @@ def cluster_primers_from_tsv (tsv = None, output = None, subsample=100, threshol
     df = subsample_primers (df, subsample=subsample)
     df = cluster_primers_with_vsearch (df, nthreads = nthreads, scratch=scratch)
     df = cluster_profiles_with_vsearch (df, nthreads = nthreads, simple_cluster_id = True, scratch=scratch)
-    df.to_csv (f"{output}_0.tsv.xz", sep="\t", index=False, compression="xz")
 
     logger.info (f"Found {len(df['v_cluster'].unique())} clusters with vsearch; Will now cluster profiles at similarity {threshold}")
     df = merge_vsearch_profiles (df, identity = threshold, nthreads = nthreads)

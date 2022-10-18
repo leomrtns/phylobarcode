@@ -10,10 +10,10 @@ logger = logging.getLogger("phylobarcode_global_logger")
 
 genesets = { # not used; noted here for  legacy purposes
         "hug"     : ["S10","L3","L4","L2","S19","L22","S3","L16","S17","L14","L24","L5","S8","L6","L18","L15"], # 16 riboprots from Hug
-        "core"    : ["L23","L29","S14","S5","L30"], 
+        "core"    : ["L23","L29","S14","S5","L30", "secY_"], ## notice that secY_ is not a riboprot, and note the underscore
         "left"    : ["S12","S7", "fus_", "tuf_"],    
-        "leftleft": ["secE", "nusG", "L11","L1","L10","L7", "rpoB", "rpoC"], # L7 includes L7/L12 
-        "right"   : ["secY", "map", "infA", "L36","S13","S11","S4","L17"] # core between S7 and L36
+        "leftleft": ["secE_", "nusG_", "L11","L1","L10","L7", "rpoB_", "rpoC_"], # L7 includes L7/L12 
+        "right"   : ["map_", "infA_", "L36","S13","S11","S4","L17"] # core between S7 and L36
     }
 genesets["main"] = [x for y in genesets.keys() if y != "extended" for x in genesets[y]]
 genesets["core"]     += genesets["hug"]
@@ -63,6 +63,7 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
     merge_df = pd.read_csv (merge_tsvfile, sep="\t", dtype = str)
     if merge_df.empty:
         logger.error (f"Merged file {merge_tsvfile} with fasta x GFF3 info is empty, exiting"); sys.exit(1)
+    merge_df = split_gtdb_taxonomy_from_dataframe (merge_df)
 
     if isinstance (riboprot_subset, str) and riboprot_subset in genesets:
         coord_df = coord_df[coord_df["product"].isin(genesets[riboprot_subset])]
@@ -97,26 +98,37 @@ def extract_operons_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir
                         short_operon=short_operon,
                         border=border),
                     g_pool)
-        results = [elem for x in results for elem in x] # flatten list of lists [[1,2],[3,4]] -> [1,2,3,4]
+        #results = [elem for x in results for elem in x] # flatten list of lists [[1,2],[3,4]] -> [1,2,3,4]
+        mosdict = results[0]
+        for r in results[1:]:
+            for k,v in r.items():
+                if k in mosdict: mosdict[k].extend(v)
+                else: mosdict[k] = v
+
     else: ## single thread
         logger.info (f"Extracting operons from {len(genome_list)} genomes using one thread")
         logger.info (f"Thread is named arbitrarily")
         g_pool = [[coord_df, merge_df, f"{scratch}/coord.fa.gz"]] # list of lists to be compatible with multithreaded
-        results = extract_and_save_operons (g_pool[0], fastadir=fastadir, intergenic_space=intergenic_space,
+        mosdict = extract_and_save_operons (g_pool[0], fastadir=fastadir, intergenic_space=intergenic_space,
             short_operon=short_operon, border=border)
     
-    # results is a list of mosaics, we'll save the most common ones
-    moscounter = collections.Counter(results)
-    mosaics = [x[0] for x in moscounter.most_common(most_common_mosaics)] # get the 10 most common mosaics
-    tolog = "\n".join([f"Found in {x[1]} genomes:\t{x[0]}" for x in moscounter.most_common(10)])
+    # mosdict has a list of mosaics for each phylum; we'll create a Counter per phylum
+    moscounter = {k:collections.Counter(v) for k,v in mosdict.items()}
+    # and pooled mosaics over phyla
+    pooled_moscounter = collections.Counter([item for sublist in mosdict.values() for item in sublist])
+    mosaics = [x[0] for x in pooled_moscounter.most_common(most_common_mosaics)] # save the most common mosaics overall
+    for v in moscounter.values(): # also include most common mosaics per phylum (in case of rare phyla)
+        mosaics.extend([x[0] for x in v.most_common(most_common_mosaics)])
+    mosaics = list(set(mosaics)) # remove duplicates
+    tolog = "\n".join([f"Found in {x[1]} genomes:\t{x[0]}" for x in pooled_moscounter.most_common(10)])
     logger.info (f"Finished scanning genomes, the {most_common_mosaics} most common mosaics will be saved, amongst them:\n{tolog}")
 
-    operon_seqs = []
+    operon_seqs = [] # read all fasta files, one file per thread (with all operons mixed)
     for g in g_pool:
         operon_seqs.extend (read_fasta_as_list (g[2], substring=mosaics))
 
     save_mosaics_as_fasta (operon_seqs, output, mosaics)
-    save_mosaic_frequency (moscounter, output)
+    save_mosaic_frequency (moscounter, pooled_moscounter, output)
     # delete scratch subdirectory and all its contents
     shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
 
@@ -134,15 +146,28 @@ def save_mosaics_as_fasta (operon_seqs, output, mosaics):
         elif i == 6:
             logger.info (f"etc... (this may take a while)")
 
-def save_mosaic_frequency (moscounter, output):
+def save_mosaic_frequency (moscounter, pooled, output):
+    mos = list(pooled.keys())
+    phyla = list(moscounter.keys())
+    for p in moscounter.keys(): 
+        for m in mos:
+            if m not in moscounter[p]: moscounter[p][m] = 0
+
     ofile = f"{output}.mosaics.tsv"
     with open_anyformat (ofile, "w") as f:
-        f.write (str(f"mosaic\tfrequency\n").encode())
-        for k, v in moscounter.most_common():
-            f.write (str(f"{k}\t{v}\n").encode())
+        f.write (str(f"mosaic\tall").encode())
+        for p in phyla:
+            f.write (str(f"\t{p}").encode())
+        f.write (str(f"\n").encode())
+        for m in mos:
+            f.write (str(f"{m}\t{pooled[m]}").encode())
+            for p in phyla:
+                f.write (str(f"\t{moscounter[p][m]}").encode())
+            f.write (str(f"\n").encode())
 
 def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_operon=1000, border=50):
     coord_df, merge_df, fname = pool_info
+    merge_df["phylum"] = merge_df["phylum"].fillna("unknown")
     genome_list = coord_df["seqid"].unique().tolist()
     fw = open_anyformat (fname, "w")
 
@@ -208,12 +233,13 @@ def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_
             operons[name] = seq
         return operons
 
-    # save all operon mosaics into same fasta file
-    mosaics = []
+    # save all operon mosaics into same fasta file; return dict with list of mosaics per phylum
+    mosaics = {}
     n_genomes = len(genome_list)
     for i, g in enumerate(genome_list):
         cdf = coord_df[coord_df["seqid"] == g]
         mdf = merge_df[merge_df["seqid"] == g]
+        # replace na values for "unknown"
         if len(cdf) < 2 or len(mdf) < 1: continue # some genomes, specially multi-chromosomal, have one gene 
         # e.g. Burkholderia multivorans strain P1Bm2011b has 3 chromosomes
 
@@ -224,9 +250,14 @@ def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_
         genome_sequence = [x for x in genome_sequence if x.id == g] # one fasta file can have multiple genomes, each
         genome_sequence = genome_sequence[0].seq # biopython SeqRecord object s.t. we can reverse_complement() if needed
         operons = operon_from_coords (genome_sequence, cdf)
+
+        phylum = mdf["phylum"].iloc[0] # phylum name or "unknown"
         for opr,seq in operons.items():
             name = f">{g} {opr} " + mdf["fasta_description"].iloc[0]
             fw.write (str(f"{name}\n{seq}\n").encode())
-            mosaics.append (opr)
+            if phylum in mosaics:
+                mosaics[phylum].append (opr)
+            else:
+                mosaics[phylum] = [opr]
     fw.close()
     return mosaics

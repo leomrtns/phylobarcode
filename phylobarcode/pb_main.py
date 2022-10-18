@@ -128,22 +128,55 @@ def run_subsample_primers (args):
 def run_blast_primers (args):
     from phylobarcode import task_blast_primers
     generate_prefix_for_task (args, "blast")
-    if len(args.tsv) != 2:
-        logger.error("Exactly two tsv files must be provided (left and right, in order)")
-        return
-    uniq = remove_prefix_suffix (args.tsv)
-    output = [f"{args.prefix}_{outfile}" for outfile in uniq]
-    if args.accurate: task = "blastn-short"
-    else: task = "blastn"
-    if args.max_target_seqs > 1e9: args.max_target_seqs = 1e9
-    if args.max_target_seqs < 1: args.max_target_seqs = 1
     if not args.nthreads: 
         args.nthreads = defaults["nthreads"]
         logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
     else:
         logger.info(f"{args.nthreads} threads were requested by user (actual pool may be smaller)")
-    task_blast_primers.blast_primers_from_tsv (tsv=args.tsv, output=output, database = args.database, evalue=args.evalue, 
-            task=task, max_target_seqs = args.max_target_seqs, taxon=args.taxon, nthreads=args.nthreads)
+    if args.accurate: task = "blastn-short"
+    else: task = "blastn"
+    if args.max_target_seqs > 1e9: args.max_target_seqs = 1e9
+    if args.max_target_seqs < 1: args.max_target_seqs = 1
+    if len(args.tsv) < 2:
+        task_blast_primers.blast_primers_from_tsv (tsv=args.tsv[0], output=args.prefix, 
+                database=args.database, evalue=args.evalue, task=task, 
+                max_target_seqs=args.max_target_seqs, taxon=args.taxon, nthreads=args.nthreads)
+        return
+    uniq = remove_prefix_suffix (args.tsv)
+    for infile, outfile in zip (args.tsv, uniq):
+        task_blast_primers.blast_primers_from_tsv (tsv=infile, output=f"{args.prefix}_{outfile}", 
+                database=args.database, evalue=args.evalue, task=task, 
+                max_target_seqs=args.max_target_seqs, taxon=args.taxon, nthreads=args.nthreads)
+    return
+
+
+def pair_blast_primers (args):
+    from phylobarcode import task_pair_primers
+    generate_prefix_for_task (args, "paired")
+    if len(args.tsv) != 2:
+        logger.error("Exactly two tsv files must be provided (left and right, in order)")
+        return
+    uniq = remove_prefix_suffix (args.tsv)
+    output = [f"{args.prefix}_{outfile}" for outfile in uniq]
+    if not args.nthreads: 
+        args.nthreads = defaults["nthreads"]
+        logger.info(f"{args.nthreads} threads are available (actual pool may be smaller)")
+    else:
+        logger.info(f"{args.nthreads} threads were requested by user (actual pool may be smaller)")
+    task_pair_primers.pair_primers_from_raw_tsv (tsv=args.tsv, output=output, taxon=args.taxon, nthreads=args.nthreads)
+    return
+
+def run_select_primers (args):
+    from phylobarcode import task_blast_primers
+    generate_prefix_for_task (args, "selected")
+    if len(args.tsv) < 2:
+        task_blast_primers.select_primers_from_tsv (tsv=args.tsv[0], subsample=args.subsample, 
+                n_elements = args.n_primers, output=args.prefix)
+        return
+    uniq = remove_prefix_suffix (args.tsv)
+    for infile, outfile in zip (args.tsv, uniq):
+        task_blast_primers.select_primers_from_tsv (tsv=infile, subsample=args.subsample, 
+                n_elements = args.n_primers, output=f"{args.prefix}_{outfile}")
     return
 
 def remove_prefix_suffix (strlist):
@@ -331,7 +364,8 @@ def main():
     distinct clusters are preferred.  The other variables include the number of genera/taxa/sequences where primer was
     found, longest distance of primer to border, primer length, and penalty score as given by primer3.
 
-    If both `-s` and `-n` are given, then the number of primers (`-n`) is used and the percentage (`-s`) is ignored.
+    If both `-s` and `-n` are given, then first the quantiles are used to exclude primers, and from the remaining the best N are selected.
+
     '''
     up_findp = subp.add_parser('subsample_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser],
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
@@ -342,7 +376,7 @@ def main():
             help="number (or proportions if < 1) of primers to keep (default is to ignore this and use subsample percentage)")
     up_findp.set_defaults(func = run_subsample_primers)
 
-    this_help = "Blast primers against database, checking for left-right pairs."
+    this_help = "Blast primers against database (in the future will check for left-right pairs)."
     extra_help= '''\n
     Needs exactly two tsv files, with left and right primers respectively. These tsv files should be the output of
     `find_primers`, `cluster_primers`, or `subsample_primers`. 
@@ -365,6 +399,24 @@ def main():
     up_findp.add_argument('-x', '--taxon', metavar='tsv',
             help="tsv file with taxonomy information (output from 'merge_fasta_gff')")
     up_findp.set_defaults(func = run_blast_primers)
+
+    this_help = "Select best primers based on blast results."
+    extra_help= '''\n
+    Can use a single tsv file or a pair (with left and right primers respectively). First it uses subsampling (`-s` or
+    `--subsample`) on each of the variables it tracks (like number of unique families or genera hit by primer), to
+    select only the "best" according to each variable. Then it sorts the resulting primers according to all variables
+    and selectes the best `-n` or `--n_primers`.
+    It also removes unused columns calculated by `blast_primers` (those related to "_all" hits, not just the best ones).
+    The input files will be the `stats.tsv` files from `blast_primers`.
+    '''
+    up_findp = subp.add_parser('select_primers', help=this_help, description=this_help + extra_help, parents=[parent_parser],
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('tsv', nargs="+", help="tsv files with primers (each ouput file from 'blast_primers')")
+    up_findp.add_argument('-s', '--subsample', metavar='float', type=float, default = 90,
+            help="quantile percentage of best primers to be selected (default=90 percent)")
+    up_findp.add_argument('-n', '--n_primers', metavar='int/float', type=float, default = None,
+            help="number (or proportions if < 1) of primers to keep (default is to ignore this and use subsample percentage)")
+    up_findp.set_defaults(func = run_select_primers)
 
     args = main_parser.parse_args()
     logger.setLevel(args.loglevel)
