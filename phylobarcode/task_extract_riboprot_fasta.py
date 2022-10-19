@@ -261,3 +261,109 @@ def extract_and_save_operons (pool_info, fastadir, intergenic_space=1000, short_
                 mosaics[phylum] = [opr]
     fw.close()
     return mosaics
+
+### task 2 : extract individual genes from genomes
+
+def extract_genes_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir=None, output=None, scratch = None, nthreads = 1): 
+    hash_name = '%012x' % random.randrange(16**12) 
+    if coord_tsvfile  is None:
+        logger.error ("No coordinates file provided"); sys.exit(1)
+    if merge_tsvfile  is None:
+        logger.error ("No merge file provided"); sys.exit(1)
+    if fastadir  is None:
+        logger.error ("No fasta directory provided"); sys.exit(1)
+    if output  is None: 
+        output = f"genes.{hash_name}" 
+        logger.warning (f"No output file provided, using {output}")
+    if scratch  is None:
+        scratch = f"scratch.{hash_name}"
+        logger.warning (f"No scratch directory provided, using {scratch}")
+
+    coord_df = pd.read_csv (coord_tsvfile, sep="\t", dtype = str)
+    coord_df = coord_df.drop_duplicates () # some sequences appear twice in the table
+    if coord_df.empty:
+        logger.error (f"Coordinates file {coord_tsvfile} is empty, exiting"); sys.exit(1)
+    merge_df = pd.read_csv (merge_tsvfile, sep="\t", dtype = str)
+    if merge_df.empty:
+        logger.error (f"Merged file {merge_tsvfile} with fasta x GFF3 info is empty, exiting"); sys.exit(1)
+    merge_df = split_gtdb_taxonomy_from_dataframe (merge_df, replace="unknown")
+
+    if not os.path.exists(scratch):
+        pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # create scratch subdirectory
+        scratch_created = True
+    else:
+        scratch_created = False
+
+    genome_list = coord_df["seqid"].unique().tolist()
+    if nthreads > 1:
+        logger.info (f"Extracting genes from {len(genome_list)} genomes using {nthreads} threads. Thread names are arbitrary")
+        from multiprocessing import Pool
+        from functools import partial
+        genome_chunks = [genome_list[i::nthreads] for i in range(nthreads)]
+        g_pool = []
+        for g in genome_chunks:
+            cdf = coord_df[coord_df["seqid"].isin(g)]
+            mdf = merge_df[merge_df["seqid"].isin(g)]
+            dirname = f"{scratch}/{g[0]}/" # files will be "{scratch}/{genomeID}/{gn}.fasta"
+            pathlib.Path(dirname).mkdir(parents=True, exist_ok=True) # create one subdir per thread
+            g_pool.append ([cdf, mdf, dirname])
+        with Pool(len(genome_chunks)) as p:
+            results = p.map(partial(extract_genes_from_fasta_per_thread, fastadir=fastadir), g_pool)
+        result = list(set([element for sublist in results for element in sublist])) # flatten list of lists
+        accumulate_gene_fasta_files (g_pool, results, output) ## merge fasta files from subdirs and delete them
+
+    else:
+        g_pool = [coord_df, merge_df, f"{output}."] ## files will be "{output}.{gn}.fa"
+        results = [extract_genes_from_fasta_per_thread (g_pool, fastadir=fastadir)]
+
+    if scratch_created:
+        shutil.rmtree(pathlib.Path(scratch)) # delete scratch subdirectory
+
+def accumulate_gene_fasta_files (g_pool, gene_names, output):
+    dirnames = [x[2] for x in g_pool]
+    for gn in gene_name:
+        gnfname = f"{output}.{gn}.fasta" # uncompressed to flush to disk ASAP
+        with open_anyformat (gnfname, "w") as f_all: # merged file on "output"
+            for d in dirnames: 
+                this_fname = f"{d}{gn}.fasta"
+                if os.path.isfile(this_fname):
+                    with open_anyformat (this_fname, "r") as f_this:
+                        f_all.write (f_this.read())
+    for d in dirnames:
+        shutil.rmtree(pathlib.Path(d))
+
+def extract_genes_from_fasta_per_thread (g_pool, fastadiri, keep_paralogs=True):
+    coord_df, merge_df, dirname = g_pool
+    genome_list = coord_df["seqid"].unique().tolist()
+    n_genomes = len(genome_list)
+    fnames_open = {}
+    for i, g in enumerate(genome_list):
+        cdf = coord_df[coord_df["seqid"] == g]
+        mdf = merge_df[merge_df["seqid"] == g]
+        if len(cdf) < 2 or len(mdf) < 1: continue # some genomes, specially multi-chromosomal, have one gene 
+        mdf = mdf.iloc[0] # only one row per genome
+        if i and i % (n_genomes//10) == 0: 
+            logger.info (f"{round((i*100)/n_genomes,1)}% of files (n_genomes) processed")
+
+        genome_sequence = read_fasta_as_list (os.path.join (fastadir, mdf["fasta_file"]))
+        genome_sequence = [x for x in genome_sequence if x.id == g] # one fasta file can have multiple genomes, each
+        genome_sequence = genome_sequence[0].seq # biopython SeqRecord object s.t. we can reverse_complement() if needed
+
+        for x in cdf.itertuples(): ## assumes zero-based coordinates
+            if x.strand == "-":
+                gene_sequence = genome_sequence[int(x.start):int(x.end)+1].reverse_complement()
+            else:
+                gene_sequence = genome_sequence[int(x.start):int(x.end)+1]
+            if keep_paralogs: x.seqid = f"{x.seqid}|{x.start}" # name will include location number to distinguish paralogs
+            seqname = f"{x.seqid} |{mdf['order']}|{mdf['family']}|{mdf['genus']}|{mdf['species']}| {mdf['fasta_description']}"
+            gn = x.product.replace("_", "")
+            if gn in fnames_open:
+                f = fnames_open[gn]
+            else:
+                fname = f"{dirname}{gn}.fasta"
+                f = open_anyformat (fname, "w")
+                fnames_open[gn] = f
+            f.write (str(f">{seqname}\n{gene_sequence}\n").encode())
+
+    for f in fnames_open.values(): f.close()
+    return list(fnames_open.keys())
