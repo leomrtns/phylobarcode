@@ -289,7 +289,7 @@ def extract_genes_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir=N
         logger.error (f"Merged file {merge_tsvfile} with fasta x GFF3 info is empty, exiting"); sys.exit(1)
     merge_df = split_gtdb_taxonomy_from_dataframe (merge_df, replace="unknown")
 
-    if not os.path.exists(scratch):
+    if nthreads > 1 and not os.path.exists(scratch): ## if single threaded we don't use scratch
         pathlib.Path(scratch).mkdir(parents=True, exist_ok=True) # create scratch subdirectory
         scratch_created = True
     else:
@@ -311,7 +311,7 @@ def extract_genes_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir=N
         with Pool(len(genome_chunks)) as p:
             results = p.map(partial(extract_genes_from_fasta_per_thread, fastadir=fastadir, 
                                     keep_paralogs = keep_paralogs), g_pool)
-        result = list(set([element for sublist in results for element in sublist])) # flatten list of lists
+        results = list(set([element for sublist in results for element in sublist])) # flatten list of lists
         accumulate_gene_fasta_files (g_pool, results, output) ## merge fasta files from subdirs and delete them
 
     else:
@@ -323,14 +323,14 @@ def extract_genes_from_fasta (coord_tsvfile=None, merge_tsvfile=None, fastadir=N
 
 def accumulate_gene_fasta_files (g_pool, gene_names, output):
     dirnames = [x[2] for x in g_pool]
-    for gn in gene_name:
+    for gn in gene_names:
         gnfname = f"{output}.{gn}.fasta" # uncompressed to flush to disk ASAP
         with open_anyformat (gnfname, "w") as f_all: # merged file on "output"
             for d in dirnames: 
                 this_fname = f"{d}{gn}.fasta"
                 if os.path.isfile(this_fname):
                     with open_anyformat (this_fname, "r") as f_this:
-                        f_all.write (f_this.read())
+                        f_all.write (str(f_this.read()).encode())
     for d in dirnames:
         shutil.rmtree(pathlib.Path(d))
 
@@ -344,8 +344,8 @@ def extract_genes_from_fasta_per_thread (g_pool, fastadir, keep_paralogs=False):
         mdf = merge_df[merge_df["seqid"] == g]
         if len(cdf) < 2 or len(mdf) < 1: continue # some genomes, specially multi-chromosomal, have one gene 
         mdf = mdf.iloc[0] # only one row per genome
-        if i and i % (n_genomes//10) == 0: 
-            logger.info (f"{round((i*100)/n_genomes,1)}% of files (n_genomes) processed")
+        if i and i % int(n_genomes/10) == 0: 
+            logger.info (f"{round((i*100)/n_genomes,0)}% of files ({n_genomes}) processed")
 
         genome_sequence = read_fasta_as_list (os.path.join (fastadir, mdf["fasta_file"]))
         genome_sequence = [x for x in genome_sequence if x.id == g] # one fasta file can have multiple genomes, each
@@ -357,16 +357,15 @@ def extract_genes_from_fasta_per_thread (g_pool, fastadir, keep_paralogs=False):
                 gene_sequence = genome_sequence[int(x.start):int(x.end)+1].reverse_complement()
             else:
                 gene_sequence = genome_sequence[int(x.start):int(x.end)+1]
-            x.product = x.product.replace("_", "")
-            if keep_paralogs: seqid = f"{x.seqid}|{x.product}|{x.start}" # name will include location number to distinguish paralogs
-            else: seqid = f"{x.seqid}|{x.product}" # name will include location number to distinguish paralogs
+            product = str(x.product).replace("_", "")
+            if keep_paralogs: seqid = f"{x.seqid}|{product}|{x.start}" # name will include location number to distinguish paralogs
+            else: seqid = f"{x.seqid}|{product}" # name will include location number to distinguish paralogs
 
             if seqid not in genes:
-                genes[seqid]["gene"] = x.product
-                genes[seqid]["seq"] = gene_sequence
+                genes[seqid] = {"gene":product, "seq":gene_sequence}
             else:
                 if len(genes[seqid]["seq"]) < len(gene_sequence):
-                genes[seqid]["seq"] = gene_sequence
+                    genes[seqid]["seq"] = gene_sequence
 
         for seqid, gn in genes.items():
             seqname = f"{seqid} |{mdf['order']}|{mdf['family']}|{mdf['genus']}|{mdf['species']}| {mdf['fasta_description']}"
@@ -376,7 +375,8 @@ def extract_genes_from_fasta_per_thread (g_pool, fastadir, keep_paralogs=False):
                 fname = f"{dirname}{gn['gene']}.fasta"
                 f = open_anyformat (fname, "w")
                 fnames_open[gn["gene"]] = f
-            f.write (str(f">{seqname}\n{gn['gene_sequence']}\n").encode())
+            f.write (str(f">{seqname}\n{gn['seq']}\n").encode())
+            f.flush()
 
     for f in fnames_open.values(): f.close()
     return list(fnames_open.keys())
@@ -392,7 +392,7 @@ def extract_genes_from_fasta_per_thread_old (g_pool, fastadiri, keep_paralogs=Tr
         if len(cdf) < 2 or len(mdf) < 1: continue # some genomes, specially multi-chromosomal, have one gene 
         mdf = mdf.iloc[0] # only one row per genome
         if i and i % (n_genomes//10) == 0: 
-            logger.info (f"{round((i*100)/n_genomes,1)}% of files (n_genomes) processed")
+            logger.info (f"{round((i*100)/n_genomes,1)}% of files ({n_genomes}) processed")
 
         genome_sequence = read_fasta_as_list (os.path.join (fastadir, mdf["fasta_file"]))
         genome_sequence = [x for x in genome_sequence if x.id == g] # one fasta file can have multiple genomes, each

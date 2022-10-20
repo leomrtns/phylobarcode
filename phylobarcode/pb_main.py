@@ -1,5 +1,6 @@
 import os, logging, argparse, sys, pathlib, multiprocessing, datetime, itertools, pathlib, random
 from phylobarcode.__version__ import __version__
+from phylobarcode.pb_common import *
 
 stream_log = logging.StreamHandler()
 #log_format = logging.Formatter(fmt='phylobarcode___main %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d%H:%M") # now it's shared 
@@ -72,6 +73,14 @@ def run_extract_genes_from_fasta (args):
     task_extract_riboprot_fasta.extract_genes_from_fasta (coord_tsvfile = args.coords, merge_tsvfile = args.tsv,
             fastadir=args.fasta, output=args.prefix, scratch=args.scratch, keep_paralogs = args.paralogs, 
             nthreads=args.nthreads)
+
+
+def run_cluster_align_genes (args):
+    from phylobarcode import task_align
+    generate_prefix_for_task (args, "align")
+    if not args.nthreads: args.nthreads = defaults["nthreads"]
+    task_align.cluster_align_gene_files (genefiles=args.genes, output=args.prefix, nthreads=args.nthreads, scratch=args.scratch)
+    ## STOPHERE
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
@@ -186,21 +195,6 @@ def run_select_primers (args):
                 n_elements = args.n_primers, output=f"{args.prefix}_{outfile}")
     return
 
-def remove_prefix_suffix (strlist):
-    def all_same(x):  # https://stackoverflow.com/a/6719272/204903
-        return all(x[0] == y for y in x)
-    char_tuples = zip(*strlist)
-    fix_tuples  = itertools.takewhile(all_same, char_tuples)
-    prefix = ''.join(x[0] for x in fix_tuples)
-    inverse = [x[::-1] for x in strlist]
-    char_tuples = zip(*inverse)
-    fix_tuples  = itertools.takewhile(all_same, char_tuples)
-    suffix = ''.join(x[0] for x in fix_tuples)
-    suffix = suffix[::-1]
-
-    l_pre = len(prefix) ## we could skip "prefix" and store lenght of fix_tuples but this is more readable
-    l_suf = len(suffix)
-    return [x[l_pre:len(x)-l_suf] for x in strlist] # does not work well for 'lefT' and 'righT' 
 
 class ParserWithErrorHelp(argparse.ArgumentParser):
     def error(self, message):

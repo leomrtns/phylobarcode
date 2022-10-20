@@ -10,6 +10,22 @@ logger = logging.getLogger("phylobarcode_global_logger")
 base62 = string.digits + string.ascii_letters + '_.-+~@'  # 66 elements actually (62 is alphanum only)
 len_base62 = len (base62)
 
+def remove_prefix_suffix (strlist):
+    def all_same(x):  # https://stackoverflow.com/a/6719272/204903
+        return all(x[0] == y for y in x)
+    char_tuples = zip(*strlist)
+    fix_tuples  = itertools.takewhile(all_same, char_tuples)
+    prefix = ''.join(x[0] for x in fix_tuples)
+    inverse = [x[::-1] for x in strlist]
+    char_tuples = zip(*inverse)
+    fix_tuples  = itertools.takewhile(all_same, char_tuples)
+    suffix = ''.join(x[0] for x in fix_tuples)
+    suffix = suffix[::-1]
+
+    l_pre = len(prefix) ## we could skip "prefix" and store lenght of fix_tuples but this is more readable
+    l_suf = len(suffix)
+    return [x[l_pre:len(x)-l_suf] for x in strlist] # does not work well for 'lefT' and 'righT' 
+
 def split_gtdb_taxonomy_from_dataframe (taxon_df, gtdb_column = "gtdb_taxonomy", drop_gtdb_column = True, replace = None):
     '''
     Splits the GTDB taxonomy string into a list of taxonomic ranks: 
@@ -56,23 +72,63 @@ def read_fasta_headers_as_list (filename):
     logger.debug("Read %s sequence headers from file %s", str(len(seqnames)), filename)
     return seqnames
 
-def mafft_align_seqs (sequences=None, infile = None, outfile = None, reference_file = None, prefix = "/tmp/"):    # list not dict
+def mafft_align_seqs (sequences=None, infile = None, outfile = None, prefix = None, nthreads = 1): # list not dict
     if (sequences is None) and (infile is None):
-        print ("ERROR: You must give me a fasta object or a file")
+        logger.error("You must give me a fasta object or a file")
+        return None
     if prefix is None: prefix = "./"
-    if infile is None: ifl = f"{prefix}/mafft.fasta"
+    hash_name = '%012x' % random.randrange(16**12)
+    if infile is None: ifl = f"{prefix}/mafft_{hash_name}.fasta"
     else: ifl = infile # if both infile and sequences are present, it will save (overwrite) infile
-    if outfile is None: ofl = f"{prefix}/mafft.aln"
+    if outfile is None: ofl = f"{prefix}/mafft_{hash_name}.aln"
     else: ofl = outfile # in this case it will not exclude_reference
     if sequences: SeqIO.write(sequences, ifl, "fasta") ## else it should be present in infile
+    if nthreads < 1: nthreads = -1 # mafft default to use all available threads
 
-    runstr = f"mafft --auto --thread -1 {ifl} > {ofl}"
+    runstr = f"mafft --auto --ep 0.23 --leavegappyregion --thread {nthreads} {ifl} > {ofl}"
     proc_run = subprocess.check_output(runstr, shell=True, universal_newlines=True)
     aligned = AlignIO.read(ofl, "fasta")
 
-    if infile is None:  os.system("rm -f " + ifl)
-    if outfile is None: os.system("rm -f " + ofl)
+    if infile is None:  os.remove(ifl)
+    if outfile is None: os.remove(ofl)
     return aligned
+
+def cdhit_cluster_seqs (sequences=None, infile = None, outfile = None, prefix = None, nthreads = 1, 
+        id = 0.9, fast = True): # list not dict
+    def read_clstr_file (clstr_file):
+        clusters = {}
+        with open(clstr_file, "r") as clstr:
+            for line in clstr:
+                if line.startswith(">"):
+                    cluster_id = line.strip().split()[1] # e.g. ">Cluster 0"
+                    clusters[cluster_id] = []
+                else:
+                    x = line.strip().split()[2].strip(">")
+                    clusters[cluster_id].append(x[:x.index("...")]) # e.g. "0	100nt, >seq1... at 100%"
+        return clusters
+
+    if (sequences is None) and (infile is None):
+        print ("ERROR: You must give me a fasta object or a file")
+    if prefix is None: prefix = "./"
+    hash_name = '%012x' % random.randrange(16**12)
+    if infile is None: ifl = f"{prefix}/cdhit_{hash_name}.fasta"
+    else: ifl = infile # if both infile and sequences are present, it will save (overwrite) infile
+    if outfile is None: ofl = f"{prefix}/cdhit_{hash_name}.reps.fasta"
+    else: ofl = outfile # in this case it will not exclude_reference
+    if sequences: SeqIO.write(sequences, ifl, "fasta") ## else it should be present in infile
+    if nthreads < 1: nthreads = 0 # cdhit default to use all available threads
+    if fast is True: algo = "0" # sequence is clustered to the first cluster that meet the threshold
+    else: algo = "1" # sequence is clustered to the most similar cluster that meet the threshold
+
+    runstr = f"cd-hit -i {ifl} -o {ofl} -c {id} -M 0 -T {nthreads} -d 0 -aS 0.5 -aL 0.5 -g {algo} -s 0.5 -p 0"
+    proc_run = subprocess.check_output(runstr, shell=True, universal_newlines=True)
+    representatives = SeqIO.parse(ofl, "fasta")
+    clusters = read_clstr_file(f"{ofl}.clstr")
+
+    if infile is None:  os.remove(ifl)
+    if outfile is None: os.remove(ofl)
+    os.remove(f"{ofl}.clstr") ## always remove the clstr file
+    return representatives, clusters
 
 def calc_freq_N_from_string (genome):
     l = len(genome)
