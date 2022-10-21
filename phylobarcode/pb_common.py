@@ -1,5 +1,5 @@
 import os, logging, xxhash
-from Bio import Seq, SeqIO
+from Bio import Seq, SeqIO, AlignIO
 import random, datetime, sys, re, glob, collections, subprocess, itertools, pathlib, base64, string
 import lzma, gzip, bz2
 
@@ -105,6 +105,7 @@ def cdhit_cluster_seqs (sequences=None, infile = None, outfile = None, prefix = 
                 else:
                     x = line.strip().split()[2].strip(">")
                     clusters[cluster_id].append(x[:x.index("...")]) # e.g. "0	100nt, >seq1... at 100%"
+        clusters = [v for v in clusters.values()] # dict of lists to list of lists (we don't need cluster ids)
         return clusters
 
     if (sequences is None) and (infile is None):

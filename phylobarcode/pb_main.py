@@ -74,13 +74,12 @@ def run_extract_genes_from_fasta (args):
             fastadir=args.fasta, output=args.prefix, scratch=args.scratch, keep_paralogs = args.paralogs, 
             nthreads=args.nthreads)
 
-
 def run_cluster_align_genes (args):
     from phylobarcode import task_align
     generate_prefix_for_task (args, "align")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
-    task_align.cluster_align_gene_files (genefiles=args.genes, output=args.prefix, nthreads=args.nthreads, scratch=args.scratch)
-    ## STOPHERE
+    task_align.cluster_align_gene_files (genefiles=args.fasta, output=args.prefix, nthreads=args.nthreads, 
+            csvfile = args.taxon, scratch=args.scratch)
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
@@ -195,7 +194,6 @@ def run_select_primers (args):
                 n_elements = args.n_primers, output=f"{args.prefix}_{outfile}")
     return
 
-
 class ParserWithErrorHelp(argparse.ArgumentParser):
     def error(self, message):
         sys.stderr.write('error: %s\n' % message)
@@ -304,6 +302,21 @@ def main():
     up_findp.add_argument('-p', '--paralogs',  action="store_true", default = False,
             help="include all copies (paralogs) in fasta files (default=keep only one copy)")
     up_findp.set_defaults(func = run_extract_genes_from_fasta)
+
+    this_help = "Given a list of gene fasta files, clusters, aligns, and calculates monophyly statistics"
+    extra_help= '''\n
+    This program clusters, aligns, and calculates monophyly statistics for a list of gene fasta files.
+    If a taxonomy file is provided (the merged file from  `merge_fasta_gff`) then these values are used, o.w. the fasta
+    header is assumed to have this information, as output by `extract_genes`.
+    '''
+    up_findp = subp.add_parser('cluster_align_genes', help=this_help, description=this_help + extra_help, parents=[parent_parser],
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('fasta', metavar="fasta", nargs='+', 
+            help="list of fasta files with genes, as output by `extract_genes` (required)")
+    up_findp.add_argument('-x', '--taxon', metavar="tsv", 
+            help="tsv file with taxonomy information, as output from 'merge_fasta_gff' (default is to extract taxonomy from fasta headers)")
+    up_findp.set_defaults(func = run_cluster_align_genes)
+
 
     this_help = "Find primers given a fasta file." # help is shown in "prog -h", description is shown in "prog this -h"
     extra_help= '''\n
