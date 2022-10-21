@@ -13,6 +13,8 @@ len_base62 = len (base62)
 def remove_prefix_suffix (strlist):
     def all_same(x):  # https://stackoverflow.com/a/6719272/204903
         return all(x[0] == y for y in x)
+    if isinstance(strlist, str): return ""
+    if len(strlist) == 1: return ""
     char_tuples = zip(*strlist)
     fix_tuples  = itertools.takewhile(all_same, char_tuples)
     prefix = ''.join(x[0] for x in fix_tuples)
