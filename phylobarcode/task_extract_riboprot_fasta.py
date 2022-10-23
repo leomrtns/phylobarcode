@@ -331,8 +331,8 @@ def accumulate_gene_fasta_files (g_pool, gene_names, output):
                 if os.path.isfile(this_fname):
                     with open_anyformat (this_fname, "r") as f_this:
                         f_all.write (str(f_this.read()).encode())
-    for d in dirnames:
-        shutil.rmtree(pathlib.Path(d))
+    #for d in dirnames:
+    #    shutil.rmtree(pathlib.Path(d))
 
 def extract_genes_from_fasta_per_thread (g_pool, fastadir, keep_paralogs=False):
     coord_df, merge_df, dirname = g_pool

@@ -1,7 +1,8 @@
 import os, logging, xxhash
 from Bio import Seq, SeqIO, AlignIO
 import random, datetime, sys, re, glob, collections, subprocess, itertools, pathlib, base64, string
-import lzma, gzip, bz2
+import lzma, gzip, bz2, dendropy
+from sklearn import metrics
 
 # legacy code, now every module shares the same parent logger
 #log_format = logging.Formatter(fmt='phylobarcode_common %(asctime)s [%(levelname)s] %(message)s', datefmt="%Y-%m-%d %H:%M")
@@ -88,8 +89,13 @@ def mafft_align_seqs (sequences=None, infile = None, outfile = None, prefix = No
     if nthreads < 1: nthreads = -1 # mafft default to use all available threads
 
     runstr = f"mafft --auto --ep 0.23 --leavegappyregion --thread {nthreads} {ifl} > {ofl}"
-    proc_run = subprocess.check_output(runstr, shell=True, universal_newlines=True)
-    aligned = AlignIO.read(ofl, "fasta")
+    try:
+        proc_run = subprocess.check_output(runstr, shell=True, universal_newlines=True)
+    except subprocess.CalledProcessError as e:
+        logger.error("Error running mafft: %s", e)
+        aligned = None
+    else:
+        aligned = AlignIO.read(ofl, "fasta")
 
     if infile is None:  os.remove(ifl)
     if outfile is None: os.remove(ofl)
@@ -124,14 +130,107 @@ def cdhit_cluster_seqs (sequences=None, infile = None, outfile = None, prefix = 
     else: algo = "1" # sequence is clustered to the most similar cluster that meet the threshold
 
     runstr = f"cd-hit -i {ifl} -o {ofl} -c {id} -M 0 -T {nthreads} -d 0 -aS 0.5 -aL 0.5 -g {algo} -s 0.5 -p 0"
-    proc_run = subprocess.check_output(runstr, shell=True, universal_newlines=True)
-    representatives = SeqIO.parse(ofl, "fasta")
-    clusters = read_clstr_file(f"{ofl}.clstr")
+    try:
+        proc_run = subprocess.check_output(runstr, shell=True, universal_newlines=True)
+    except subprocess.CalledProcessError as e:
+        logger.error("Error running cdhit: %s", e)
+        representatives = None
+        clusters = None
+    else:
+        representatives = SeqIO.parse(ofl, "fasta")
+        clusters = read_clstr_file(f"{ofl}.clstr")
 
     if infile is None:  os.remove(ifl)
     if outfile is None: os.remove(ofl)
     os.remove(f"{ofl}.clstr") ## always remove the clstr file
     return representatives, clusters
+
+# In general (not here particularly) we use dendropy since it can handle commented nodes (metadata)
+#   e.g. the GTDB tree
+def silhouette_score_from_newick_string (newick, class_dict):
+    """
+    returns silhouette scores for all tips in the tree as dictionaries: one considering 
+    branch lengths and another considering only number of nodes
+    """
+    tree = dendropy.Tree.get(data=newick, schema="newick", preserve_underscores=True)
+    species = [class_dict[x.label] for x in tree.taxon_namespace]
+    ntaxa = len(species)
+    distmat = np.zeros((ntaxa, ntaxa))
+    nodemat = np.zeros((ntaxa, ntaxa))
+    # STEP 1: pairwise distances along the tree
+    pdm = tree.phylogenetic_distance_matrix()
+    for i,j in itertools.combinations(range(ntaxa), 2):
+        distmat[j,i] = distmat[i,j] = pdm.distance(tree.taxon_namespace[i], tree.taxon_namespace[j])
+        nodemat[j,i] = nodemat[i,j] = pdm.path_edge_count(tree.taxon_namespace[i], tree.taxon_namespace[j])
+    # STEP 2: silhouette score using pairwise distances and taxonomic information
+    mdist = metrics.silhouette_samples(distmat, species, metric="precomputed")
+    mnode = metrics.silhouette_samples(nodemat, species, metric="precomputed")
+    mdist = {tree.taxon_namespace[i].label: mdist[i] for i in range(ntaxa)}
+    mnode = {tree.taxon_namespace[i].label: mnode[i] for i in range(ntaxa)}
+    return mdist, mnode # dictionaries with the silhouette score for each sequence
+
+def silhouette_score_from_newick_string_swift (newick, class_dict):
+    """ 
+    returns silhouette scores for all tips in the tree as one dictionary, considering branch lengths.
+    Much faster than the alternative function (if you want number of nodes)
+    """
+    import treeswift
+    tree = treeswift.read_tree_newick(newick)
+    species = [class_dict[x.label] for x in tree.traverse_leaves()]
+    ntaxa = len(species)
+    distmat = np.zeros((ntaxa, ntaxa))
+    # STEP 1: pairwise distances along the tree
+    dist_dict = tree.distance_matrix() ## this is a dictionary of dictionaries
+    for i,j in itertools.combinations(range(ntaxa), 2):
+        distmat[j,i] = distmat[i,j] = dist_dict[tree.leaves[i].label][tree.leaves[j].label]
+    # STEP 2: silhouette score using pairwise distances and taxonomic information
+    mdist = metrics.silhouette_samples(distmat, species, metric="precomputed")
+    mdist = {tree.leaves[i].label: mdist[i] for i in range(ntaxa)}
+    return mdist # dictionaries with the silhouette score for each sequence
+
+def newick_string_from_alignment (sequences=None, infile = None, simple_names = None, outfile = None, prefix = None, 
+        protein = False, rapidnj = None, nthreads = 1): 
+    """
+    rapidnj uses whole fasta header description, while fasttree uses only the sequence id;
+    therefore to use rapidnj is advised to use simple_names=True and give _sequences_ and not _infile_
+    """
+    if (sequences is None) and (infile is None):
+        logger.error("You must give me a fasta object or a file")
+        return None
+    if prefix is None: prefix = "./"
+    hash_name = '%012x' % random.randrange(16**12)
+    if rapidnj is True: program = "rapidnj"
+    else: program = "fasttree" 
+    if infile is None: ifl = f"{prefix}/{program}_{hash_name}.fasta"
+    else: ifl = infile # if both infile and sequences are present, it will save (overwrite) infile
+    if outfile is None: ofl = f"{prefix}/{program}_{hash_name}.tree"
+    else: ofl = outfile # in this case it will not exclude_reference
+    if sequences: # can only simplify names if SeqRecord objects are given
+        if simple_names is True:
+            # create a copy of all SeqRecords with no description (i.e. long names after space) 
+            newseqs = [SeqRecord(Seq(str(s.seq)), id=s.id, description="") for i, s in enumerate(sequences)]
+            SeqIO.write(newseqs, ifl, "fasta")
+        else:
+            SeqIO.write(sequences, ifl, "fasta")
+    if nthreads < 1: nthreads = 1 # rapidnj default to use 1 thread; fastree has no control (all or nothing)
+
+    if program == "rapidnj":
+        seqtype = "d" if protein is False else "p"
+        runstr = f"rapidnj {ifl} -i fa -c {nthreads} -t {seqtype} -n -x {ofl}"
+    else:
+        seqtype = "-nt" if protein is False else ""
+        runstr = f"fasttree {seqtype} -quiet -nni 4 -spr 4 -mlnni 2 -nocat -nosupport {ifl} > {ofl}"
+    try:
+        proc_run = subprocess.check_output(runstr, shell=True, universal_newlines=True)
+    except subprocess.CalledProcessError as e:
+        logger.error("Error running {program} %s", e)
+        treestring = None
+    else:
+        treestring = open(ofl).readline().rstrip().replace("\'","").replace("\"","").replace("[&R]","")
+
+    if infile is None:  os.remove(ifl)
+    if outfile is None: os.remove(ofl)
+    return treestring
 
 def calc_freq_N_from_string (genome):
     l = len(genome)

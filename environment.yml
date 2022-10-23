@@ -19,6 +19,10 @@ dependencies:
   - vsearch
   - gffutils
   - dendropy
+  - treeswift # only to calc cophenetic distances
+  - cd-hit
+  - rapidnj
+  - fasttree
     #  - python>3.7
     #  - primer3>2.6.0
     #  - pip

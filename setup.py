@@ -53,6 +53,7 @@ setuptools.setup(
            'pandas',
            'xxhash', 
            'dendropy',
+           'treeswift',
            'scikit-learn'
        ],
     classifiers = [
