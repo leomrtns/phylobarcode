@@ -79,7 +79,14 @@ def run_cluster_align_genes (args):
     generate_prefix_for_task (args, "align")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     task_align.cluster_align_gene_files (genefiles=args.fasta, output=args.prefix, nthreads=args.nthreads, 
-            csvfile = args.taxon, scratch=args.scratch)
+            tsvfile = args.taxon, scratch=args.scratch)
+
+def run_estimate_compare_trees (args):
+    from phylobarcode import task_align
+    generate_prefix_for_task (args, "trees")
+    if not args.nthreads: args.nthreads = defaults["nthreads"]
+    task_trees.estimate_compare_trees (alnfiles=args.fasta, output=args.prefix, nthreads=args.nthreads, 
+            tsvfile = args.taxon, gtdb_tree = args.tree, prev_tsv = args.stats, scratch=args.scratch)
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
@@ -316,6 +323,23 @@ def main():
     up_findp.add_argument('-x', '--taxon', metavar="tsv", 
             help="tsv file with taxonomy information, as output from 'merge_fasta_gff' (default is to extract taxonomy from fasta headers)")
     up_findp.set_defaults(func = run_cluster_align_genes)
+
+    this_help = "Given a set of alignment files, estimates ML trees and compare with a reference tree"
+    extra_help= '''\n
+    This program estimates ML trees for a set of alignment files and compares them with a reference tree.
+    The reference tree should be the one from GTDB database, as the one from:
+    https://data.ace.uq.edu.au/public/gtdb/data/releases/latest/bac120.tree.tar.gz
+    '''
+    up_findp = subp.add_parser('estimate_trees', help=this_help, description=this_help + extra_help, parents=[parent_parser],
+            formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
+    up_findp.add_argument('aln', metavar="aln", nargs='+',
+            help="list of alignment files, as output by `cluster_align_genes` (required)")
+    up_findp.add_argument('-t', '--tree', metavar="tree", required=True, help="reference tree file (optional)")
+    up_findp.add_argument('-s', '--stats' , metavar="tsv", 
+            help="tsv file with statistics for each gene, as output by `cluster_align_genes` (optional)")
+    up_findp.add_argument('-x', '--taxon', metavar="tsv",
+            help="tsv file with taxonomy information, as output from 'merge_fasta_gff' (default is to extract taxonomy from fasta headers)")
+    up_findp.set_defaults(func = run_estimate_compare_trees)
 
 
     this_help = "Find primers given a fasta file." # help is shown in "prog -h", description is shown in "prog this -h"

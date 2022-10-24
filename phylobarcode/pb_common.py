@@ -147,12 +147,17 @@ def cdhit_cluster_seqs (sequences=None, infile = None, outfile = None, prefix = 
 
 # In general (not here particularly) we use dendropy since it can handle commented nodes (metadata)
 #   e.g. the GTDB tree
-def silhouette_score_from_newick_string (newick, class_dict):
+def silhouette_score_from_newick_dendropy (newick, class_dict):
     """
     returns silhouette scores for all tips in the tree as dictionaries: one considering 
     branch lengths and another considering only number of nodes
     """
-    tree = dendropy.Tree.get(data=newick, schema="newick", preserve_underscores=True)
+    if isinstance (newick, str):
+        tree = dendropy.Tree.get(data=newick, schema="newick", preserve_underscores=True)
+    elif isinstance (newick, dendropy.Tree):
+        tree = newick
+    else: tree = dendropy.Tree.get(data=str(newick), schema="newick", preserve_underscores=True) # treeswift?
+    
     species = [class_dict[x.label] for x in tree.taxon_namespace]
     ntaxa = len(species)
     distmat = np.zeros((ntaxa, ntaxa))
@@ -169,13 +174,14 @@ def silhouette_score_from_newick_string (newick, class_dict):
     mnode = {tree.taxon_namespace[i].label: mnode[i] for i in range(ntaxa)}
     return mdist, mnode # dictionaries with the silhouette score for each sequence
 
-def silhouette_score_from_newick_string_swift (newick, class_dict):
+def silhouette_score_from_newick_swift (newick, class_dict):
     """ 
     returns silhouette scores for all tips in the tree as one dictionary, considering branch lengths.
     Much faster than the alternative function (if you want number of nodes)
     """
     import treeswift
-    tree = treeswift.read_tree_newick(newick)
+    if isinstance (newick, dendropy.Tree): tree = treeswift.read_tree_dendropy (newick)
+    else: tree = treeswift.read_tree_newick (newick) # treeswift object _or_ string 
     species = [class_dict[x.label] for x in tree.traverse_leaves()]
     ntaxa = len(species)
     distmat = np.zeros((ntaxa, ntaxa))
@@ -201,17 +207,19 @@ def newick_string_from_alignment (sequences=None, infile = None, simple_names = 
     hash_name = '%012x' % random.randrange(16**12)
     if rapidnj is True: program = "rapidnj"
     else: program = "fasttree" 
-    if infile is None: ifl = f"{prefix}/{program}_{hash_name}.fasta"
-    else: ifl = infile # if both infile and sequences are present, it will save (overwrite) infile
     if outfile is None: ofl = f"{prefix}/{program}_{hash_name}.tree"
     else: ofl = outfile # in this case it will not exclude_reference
-    if sequences: # can only simplify names if SeqRecord objects are given
-        if simple_names is True:
-            # create a copy of all SeqRecords with no description (i.e. long names after space) 
-            newseqs = [SeqRecord(Seq(str(s.seq)), id=s.id, description="") for i, s in enumerate(sequences)]
-            SeqIO.write(newseqs, ifl, "fasta")
-        else:
-            SeqIO.write(sequences, ifl, "fasta")
+    ifl = f"{prefix}/{program}_{hash_name}.fasta" #always generate a fasta file 
+
+    # read infile since we need to simplify the names, and infile may be compressed
+    if sequences is None: new_seqs = read_fasta_as_list (infile)
+    else: new_seqs = sequences
+
+    if simple_names is True: # create a copy of all SeqRecords with no description (i.e. long names after space) 
+        if sequences is None: # then we have new_seqs which we can overwrite (o.w. careful not to overwtite sequences)
+            for x in new_seqs: x.description = None # remove the description
+        else: newseqs = [SeqRecord(Seq(str(s.seq)), id=s.id, description="") for i, s in enumerate(sequences)] # copy
+    SeqIO.write(newseqs, ifl, "fasta")
     if nthreads < 1: nthreads = 1 # rapidnj default to use 1 thread; fastree has no control (all or nothing)
 
     if program == "rapidnj":
@@ -228,7 +236,7 @@ def newick_string_from_alignment (sequences=None, infile = None, simple_names = 
     else:
         treestring = open(ofl).readline().rstrip().replace("\'","").replace("\"","").replace("[&R]","")
 
-    if infile is None:  os.remove(ifl)
+    os.remove(ifl) ## always delete since it's created here
     if outfile is None: os.remove(ofl)
     return treestring
 
