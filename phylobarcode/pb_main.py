@@ -85,7 +85,7 @@ def run_estimate_compare_trees (args):
     from phylobarcode import task_align
     generate_prefix_for_task (args, "trees")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
-    task_trees.estimate_compare_trees (alnfiles=args.fasta, output=args.prefix, nthreads=args.nthreads, 
+    task_align.estimate_compare_trees (alnfiles=args.fasta, output=args.prefix, nthreads=args.nthreads, 
             tsvfile = args.taxon, gtdb_tree = args.tree, prev_tsv = args.stats, scratch=args.scratch)
 
 def run_find_primers (args):
@@ -332,7 +332,7 @@ def main():
     '''
     up_findp = subp.add_parser('estimate_trees', help=this_help, description=this_help + extra_help, parents=[parent_parser],
             formatter_class=argparse.RawTextHelpFormatter, epilog=epilogue)
-    up_findp.add_argument('aln', metavar="aln", nargs='+',
+    up_findp.add_argument('fasta', metavar="aln", nargs='+',
             help="list of alignment files, as output by `cluster_align_genes` (required)")
     up_findp.add_argument('-t', '--tree', metavar="tree", required=True, help="reference tree file (optional)")
     up_findp.add_argument('-s', '--stats' , metavar="tsv", 

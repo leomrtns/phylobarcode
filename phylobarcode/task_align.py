@@ -139,12 +139,16 @@ def estimate_compare_trees (alnfiles = None, output = None, scratch = None, tsvf
         pathlib.Path(scratch).mkdir(parents=True, exist_ok=True)
         scratch_created = True
     if tsvfile is not None:
+        logger.info(f"Reading taxonomic information from {tsvfile}")
         taxon_df = pd.read_csv(tsvfile, sep='\t', header=0)
         taxon_df = split_gtdb_taxonomy_from_dataframe (taxon_df, replace="unknown")
     else:
         taxon_df = None
     if gtdb_tree is not None and taxon_df is not None:
+        logger.info(f"Reading GTDB tree from {gtdb_tree}")
         ref_tree = read_translate_gtdb_tree_dendropy (gtdb_tree, taxon_df)
+        ref_tree.write_tree_newick (f"gtdb.tree") ## treeswift 
+        #ref_tree.write(path=f"gtdb.tree", schema="newick") ## dendropy
     else:
         ref_tree = None
         logger.warning("No reference tree provided or taxon table, skipping tree comparison")
@@ -170,80 +174,131 @@ def estimate_compare_trees (alnfiles = None, output = None, scratch = None, tsvf
 
 def read_translate_gtdb_tree_dendropy (treefile, taxon_df): # both have to be present (i.e. not None)
     tree = dendropy.Tree.get_from_path(treefile, schema="newick", preserve_underscores=True)
-    tree.retain_taxa_with_labels(taxon_df["gtdb_accession"].unique())
+    uniq_taxa = taxon_df["gtdb_genome_representative"].unique() # taxon_df["gtdb_accession"]
+    logger.info(f"Read tree with {len(tree.taxon_namespace)} leaves; will now remove internal node annotations")
     for node in tree.postorder_node_iter():
         node.label = None # gtdb has internal node annotations (which in dendropy are distinct from node.taxon.label)
-    for tx in tree.taxon_namespace:
-        tx.label = taxon_df[taxon_df["gtdb_accession"] == tx.label]["seqid"].values[0]
-    return tree
+    ## treeswift is much faster than dendropy
+    swtree = treeswift.read_tree_dendropy(tree) # faster than dendropy
+    logger.info(f"Will now reduce tree to {len(uniq_taxa)} known genomes")
+    swtree = swtree.extract_tree_with (uniq_taxa)
+
+    logger.info(f"Reduced tree to {swtree.num_nodes(internal=False)} taxa; will now map representative leaves to genome names")
+    leaf_map = swtree.label_to_node(selection="leaves") ## cannot use traverse_leaves() since new leaves confuse the iterator
+    for lab, node in leaf_map.items():
+        if lab == "": continue ## treeswift sometimes thinks an internal node is a leaf
+        newlabel = list(set(taxon_df[taxon_df["gtdb_genome_representative"] == lab]["seqid"].tolist()))
+        if len(newlabel) == 1:
+            node.label = newlabel[0]
+        else:
+            node.set_label("") # becomes internal node
+            for newlab in newlabel:
+                node.add_child(treeswift.Node(label=newlab, edge_length=0))
+
+    logger.info(f"Expanded tree has {swtree.num_nodes(internal=False)} leaves (genomes)")
+    #return dendropy.Tree.get_from_string(swtree.newick(), schema="newick", preserve_underscores=True)
+    return swtree
 
 def generate_tree (shortname, alnfile, output, scratch, reference_tree, taxon_df, nthreads):
     treefile = f"{output}.{shortname}.tre"
-
     seqinfo = read_fasta_headers_as_list (alnfile)
-    seqinfo = [x[1:].split(" ", 1) for x in seqinfo] # remove leading ">" and split id and description
+    seqinfo = [x.split(" ", 1) for x in seqinfo] #  split id and description
     seqinfo = {x[0]:get_seqinfo_from_sequence_header (x[0], x[1], taxon_df) for x in seqinfo}
     logger.info(f"Read seqinfo from {len(seqinfo)} sequences in {shortname} alignment")
+
+    def stats_silhouette (treestring, class_dict):
+        labdic = silhouette_score_from_newick_swift (treestring, class_dict)
+        vals = [x for x in labdic.values()]
+        return [np.quantile(vals, 0.01), np.quantile(vals, 0.05), np.quantile(vals, 0.5)]
     
     if not os.path.exists(treefile):
         logger.info(f"Generating tree for {shortname}")
-        treestring = newick_string_from_alignment (infile=alnfile, outfile=treefile, simple_names = True, nthreads=1)
+        gtre_str = newick_string_from_alignment (infile=alnfile, outfile=treefile, 
+                rapidnj = True, simple_names = True, nthreads=nthreads)
     else:
         logger.info(f"Tree file {treefile} already exists, no estimation needed")
-        treestring = open(treefile).readline().rstrip().replace("\'","").replace("\"","").replace("[&R]","")
-  
-    logger.info(f"Now comparing gene and reference trees")
+        gtre_str = open(treefile).readline().rstrip().replace("\'","").replace("\"","").replace("[&R]","")
+
     ## remember that tree labels have gene name like ">NZ_CP032229.1|L7"
-    commontaxa = dendropy.TaxonNamespace([x for x in seqinfo.keys()])
-    tree = dendropy.Tree.get_from_string (treestring, schema="newick", 
-            preserve_underscores=True, taxon_namespace=commontaxa)
+    for k,v in seqinfo.items():
+        gtre_str = gtre_str.replace(k, v["seqid"])
+
+    if reference_tree is None:
+        logger.info(f"Calculating silhouette scores (reference tree not provided)")
+    else:
+        logger.info(f"Comparing gene and reference trees, and calculating silhouette scores")
+
+    # brlens stats and normalise trees (keep copy gtre_str, which is used in silhouette)
+    tree = treeswift.read_tree_newick (gtre_str)
+    g_blens = [x.edge_length for x in tree.traverse_postorder() if x.edge_length is not None]
+    stats = {
+        "gene": shortname,
+        "gene_phylodiv_full": sum(g_blens),
+        }
+
     if reference_tree is not None:
+        c1 = set([x.label for x in reference_tree.traverse_leaves()])
+        c2 = set([x.label for x in tree.traverse_leaves()])
+        commontaxa = list(c1.intersection(c2)) # debug note: offending ref taxa not here (NC_011891.1)
         # reduce reftree to genetree
-        reftree = copy.deepcopy(reference_tree) 
-        reftree.retain_taxa (commontaxa)
+        reftree = reference_tree.extract_tree(None, False, False) ## deep copy
+        reftree = reftree.extract_tree_with (commontaxa)
         # reduce genetree to reftree
-        tree.retain_taxa (reftree.taxon_namespace)
-        commontaxa = tree.taxon_namespace
-        reftree = dendropy.Tree.get (data=reftree.as_string(schema="newick"), schema="newick",
-                preserve_underscores=True, taxon_namespace=commontaxa) # to make sure taxon_namespace is the same
-        tree = dendropy.Tree.get (data=tree.as_string(schema="newick"), schema="newick",
-                preserve_underscores=True, taxon_namespace=commontaxa)
-        ref_only, gene_only = dendropy.calculate.treecompare.false_positives_and_negatives(reftree, tree, is_bipartitions_updated=False)
-        # store unnormalised tree as string
-        rtre_str = reftree.as_string(schema="newick", suppress_rooting=True, suppress_edge_lengths=False)
-        r_blens = [x.edge_length for x in reftree.postorder_node_iter() if x.edge_length is not None]
-        stats = {
-            "gene": shortname,
-            "ref_only": ref_only,
-            "gene_only": gene_only,
+        tree = tree.extract_tree_with (commontaxa)
+        # normalise tree lengths
+        g_blens = [x.edge_length for x in tree.traverse_postorder() if x.edge_length is not None]
+        r_blens = [x.edge_length for x in reftree.traverse_postorder() if x.edge_length is not None]
+        # store unnormalised tree as string and save to file
+        rtre_str = reftree.newick()
+        outreffile = f"{output}.{shortname}.ref.tre"
+        reftree.write_tree_newick (outreffile)
+        # use dendropy to calc false pos and negs (RF distance)
+        ct = dendropy.TaxonNamespace(commontaxa) # same namespace must be used for both trees
+        rdendro = dendropy.Tree.get_from_string(reftree.newick(), schema="newick", taxon_namespace=ct, preserve_underscores=True)
+        gdendro = dendropy.Tree.get_from_string(tree.newick(), schema="newick", taxon_namespace=ct, preserve_underscores=True)
+        r_only, g_only = dendropy.calculate.treecompare.false_positives_and_negatives(rdendro, gdendro, is_bipartitions_updated=False)
+        stats = {**stats, **{
+            "ref_only": r_only,
+            "gene_only": g_only,
             "common_taxa": len(commontaxa), ## this may be smaller than the number of seqs if are missing from gtdb
             "ref_phylodiversity": sum(r_blens),
-            }
-    else:
-        # brlens stats and normalise trees (first copy strings, which are used in silhouette)
-        gtre_str = tree.as_string(schema="newick", suppress_rooting=True, suppress_edge_lengths=False)
-        g_blens = [x.edge_length for x in tree.postorder_node_iter() if x.edge_length is not None]
-        stats = {
-            "gene": shortname,
             "gene_phylodiversity": sum(g_blens),
-            }
+            }}
+        logger.info(f"Reference tree has {len(commontaxa)} leaves in common with gene tree, saved to {outreffile}")
 
-    ## calc silhouette (use dict for both genetree and reftree)
-    class_dict_sp = {x:y["species"] for x,y in seqinfo.items()}
-    class_dict_genus = {x:y["genus"] for x,y in seqinfo.items()}
-    stats["gene_sscore_species"] = silhouette_score_from_newick_swift (gtre_str, class_dict_sp)
-    stats["gene_sscore_genus"] = silhouette_score_from_newick_swift (gtre_str, class_dict_genus)
+    ## calc silhouette using treestrings (use dict for both genetree and reftree)
+    class_dict_sp = {y["seqid"]:y["species"] for y in seqinfo.values()}
+    class_dict_genus = {y["seqid"]:y["genus"] for y in seqinfo.values()}
+    sp_stats = stats_silhouette (gtre_str, class_dict_sp)
+    ge_stats = stats_silhouette (gtre_str, class_dict_genus)
+    stats = {**stats, **{
+        "gene_sscore_species_1pct": sp_stats[0],
+        "gene_sscore_species_5pct": sp_stats[1],
+        "gene_sscore_species_median": sp_stats[2],
+        "gene_sscore_genus_1pct": ge_stats[0],
+        "gene_sscore_genus_5pct": ge_stats[1],
+        "gene_sscore_genus_median": ge_stats[2],
+        }}
+    logger.info(f"Silhouette scores for {shortname} calculated")
 
-    if reference_tree is not None:
-        for x in reftree.postorder_node_iter():
+    if reference_tree is not None: # gdendro and tdendro are dendropy trees, used in Euclidean distance
+        for x in rdendro.postorder_node_iter():
             if x.edge_length is not None:
                 x.edge_length /= stats["ref_phylodiversity"]
-        for x in tree.postorder_node_iter():
+        for x in gdendro.postorder_node_iter():
             if x.edge_length is not None:
                 x.edge_length /= stats["gene_phylodiversity"]
-        d = dendropy.calculate.euclidean_distance_matrix(reftree, tree)
-        stats["blen_distance"] = d
-        stats["ref_sscore_species"]  = silhouette_score_from_newick_swift (rtre_str, class_dict_sp)
-        stats["ref_sscore_genus"]  = silhouette_score_from_newick_swift (rtre_str, class_dict_genus)
+        stats["blen_distance"] =  dendropy.calculate.treecompare.euclidean_distance(rdendro, gdendro)
+        sp_stats = stats_silhouette (rtre_str, class_dict_sp)
+        ge_stats = stats_silhouette (rtre_str, class_dict_genus)
+        stats = {**stats, **{
+            "ref_sscore_species_1pct": sp_stats[0],
+            "ref_sscore_species_5pct": sp_stats[1],
+            "ref_sscore_species_median": sp_stats[2],
+            "ref_sscore_genus_1pct": ge_stats[0],
+            "ref_sscore_genus_5pct": ge_stats[1],
+            "ref_sscore_genus_median": ge_stats[2],
+            }}
 
     return stats
+

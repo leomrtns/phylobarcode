@@ -1,7 +1,7 @@
 import os, logging, xxhash
 from Bio import Seq, SeqIO, AlignIO
 import random, datetime, sys, re, glob, collections, subprocess, itertools, pathlib, base64, string
-import lzma, gzip, bz2, dendropy
+import lzma, gzip, bz2, dendropy, treeswift, copy, numpy as np
 from sklearn import metrics
 
 # legacy code, now every module shares the same parent logger
@@ -179,19 +179,20 @@ def silhouette_score_from_newick_swift (newick, class_dict):
     returns silhouette scores for all tips in the tree as one dictionary, considering branch lengths.
     Much faster than the alternative function (if you want number of nodes)
     """
-    import treeswift
     if isinstance (newick, dendropy.Tree): tree = treeswift.read_tree_dendropy (newick)
     else: tree = treeswift.read_tree_newick (newick) # treeswift object _or_ string 
-    species = [class_dict[x.label] for x in tree.traverse_leaves()]
+    for node in tree.traverse_leaves(): node.label = node.label.replace("'", "")
+    labels = [x.label for x in tree.traverse_leaves() if x.label is not None]
+    species = [class_dict[x] for x in labels]
     ntaxa = len(species)
     distmat = np.zeros((ntaxa, ntaxa))
     # STEP 1: pairwise distances along the tree
-    dist_dict = tree.distance_matrix() ## this is a dictionary of dictionaries
+    dist_dict = tree.distance_matrix(leaf_labels=True) ## dictionary of dictionaries, with leaf labels (ow. node objects)
     for i,j in itertools.combinations(range(ntaxa), 2):
-        distmat[j,i] = distmat[i,j] = dist_dict[tree.leaves[i].label][tree.leaves[j].label]
+        distmat[j,i] = distmat[i,j] = dist_dict[labels[i]][labels[j]]
     # STEP 2: silhouette score using pairwise distances and taxonomic information
     mdist = metrics.silhouette_samples(distmat, species, metric="precomputed")
-    mdist = {tree.leaves[i].label: mdist[i] for i in range(ntaxa)}
+    mdist = {labels[i]: mdist[i] for i in range(ntaxa)}
     return mdist # dictionaries with the silhouette score for each sequence
 
 def newick_string_from_alignment (sequences=None, infile = None, simple_names = None, outfile = None, prefix = None, 
@@ -217,9 +218,9 @@ def newick_string_from_alignment (sequences=None, infile = None, simple_names = 
 
     if simple_names is True: # create a copy of all SeqRecords with no description (i.e. long names after space) 
         if sequences is None: # then we have new_seqs which we can overwrite (o.w. careful not to overwtite sequences)
-            for x in new_seqs: x.description = None # remove the description
-        else: newseqs = [SeqRecord(Seq(str(s.seq)), id=s.id, description="") for i, s in enumerate(sequences)] # copy
-    SeqIO.write(newseqs, ifl, "fasta")
+            for x in new_seqs: x.description = "" # remove the description
+        else: new_seqs = [SeqRecord(Seq(str(s.seq)), id=s.id, description="") for i, s in enumerate(sequences)] # copy
+    SeqIO.write(new_seqs, ifl, "fasta")
     if nthreads < 1: nthreads = 1 # rapidnj default to use 1 thread; fastree has no control (all or nothing)
 
     if program == "rapidnj":
