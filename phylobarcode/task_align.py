@@ -207,9 +207,12 @@ def generate_tree (shortname, alnfile, output, scratch, reference_tree, taxon_df
     logger.info(f"Read seqinfo from {len(seqinfo)} sequences in {shortname} alignment")
 
     def stats_silhouette (treestring, class_dict):
-        labdic = silhouette_score_from_newick_swift (treestring, class_dict)
-        vals = [x for x in labdic.values()]
-        return [np.quantile(vals, 0.01), np.quantile(vals, 0.05), np.quantile(vals, 0.5)]
+        try:
+            labdic = silhouette_score_from_newick_swift (treestring, class_dict)
+            vals = [x for x in labdic.values()]
+            return [np.quantile(vals, 0.01), np.quantile(vals, 0.05), np.quantile(vals, 0.5)]
+        except:
+            return [None, None, None]
     
     if not os.path.exists(treefile):
         logger.info(f"Generating tree for {shortname}")
