@@ -124,7 +124,7 @@ def cluster_align_each_gene (shortname, genefile, outfile, scratch, taxon_df, th
 ### tree and silhouette 
 
 def estimate_compare_trees (alnfiles = None, output = None, scratch = None, tsvfile = None, 
-        gtdb_tree = None, prev_tsv = None, nthreads = 1):
+        gtdb_tree = None, prev_tsv = None, rapidnj = None, nthreads = 1):
     hash_name = '%012x' % random.randrange(16**12)
     if alnfiles is None:
         logger.error("No alignment files specified")
@@ -135,6 +135,8 @@ def estimate_compare_trees (alnfiles = None, output = None, scratch = None, tsvf
     if output is None:
         output = f"phylotree.{hash_name}"
         logger.warning(f"No output file (prefix) provided, using {output}")
+    if rapidnj is None: rapidnj = False
+    if rapidnj is not False: rapidnj = True
     if not os.path.exists(scratch):
         pathlib.Path(scratch).mkdir(parents=True, exist_ok=True)
         scratch_created = True
@@ -156,7 +158,7 @@ def estimate_compare_trees (alnfiles = None, output = None, scratch = None, tsvf
     shortname = remove_prefix_suffix (alnfiles)
     tbl = []
     for short, long in zip(shortname, alnfiles):
-        tbl_row = generate_tree (short, long, output, scratch, ref_tree, taxon_df, nthreads)
+        tbl_row = generate_tree (short, long, output, scratch, ref_tree, taxon_df, rapidnj, nthreads)
         tbl.append(tbl_row)
 
     if scratch_created:
@@ -199,7 +201,7 @@ def read_translate_gtdb_tree_dendropy (treefile, taxon_df): # both have to be pr
     #return dendropy.Tree.get_from_string(swtree.newick(), schema="newick", preserve_underscores=True)
     return swtree
 
-def generate_tree (shortname, alnfile, output, scratch, reference_tree, taxon_df, nthreads):
+def generate_tree (shortname, alnfile, output, scratch, reference_tree, taxon_df, rapidnj, nthreads):
     treefile = f"{output}.{shortname}.tre"
     seqinfo = read_fasta_headers_as_list (alnfile)
     seqinfo = [x.split(" ", 1) for x in seqinfo] #  split id and description
@@ -217,7 +219,7 @@ def generate_tree (shortname, alnfile, output, scratch, reference_tree, taxon_df
     if not os.path.exists(treefile):
         logger.info(f"Generating tree for {shortname}")
         gtre_str = newick_string_from_alignment (infile=alnfile, outfile=treefile, 
-                rapidnj = True, simple_names = True, nthreads=nthreads)
+                rapidnj = rapidnj, simple_names = True, nthreads=nthreads)
     else:
         logger.info(f"Tree file {treefile} already exists, no estimation needed")
         gtre_str = open(treefile).readline().rstrip().replace("\'","").replace("\"","").replace("[&R]","")

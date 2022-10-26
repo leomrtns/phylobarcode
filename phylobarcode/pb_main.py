@@ -86,7 +86,8 @@ def run_estimate_compare_trees (args):
     generate_prefix_for_task (args, "trees")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     task_align.estimate_compare_trees (alnfiles=args.fasta, output=args.prefix, nthreads=args.nthreads, 
-            tsvfile = args.taxon, gtdb_tree = args.tree, prev_tsv = args.stats, scratch=args.scratch)
+            tsvfile = args.taxon, gtdb_tree = args.tree, prev_tsv = args.stats, rapidnj = args.rapidnj, 
+            scratch=args.scratch)
 
 def run_find_primers (args):
     from phylobarcode import task_find_primers
@@ -339,6 +340,8 @@ def main():
             help="tsv file with statistics for each gene, as output by `cluster_align_genes` (optional)")
     up_findp.add_argument('-x', '--taxon', metavar="tsv",
             help="tsv file with taxonomy information, as output from 'merge_fasta_gff' (default is to extract taxonomy from fasta headers)")
+    up_findp.add_argument('-r', '--rapidnj', default=False, action="store_true",
+            help="use rapidnj instead of default FastTree")
     up_findp.set_defaults(func = run_estimate_compare_trees)
 
 
