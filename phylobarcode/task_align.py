@@ -36,7 +36,7 @@ def cluster_align_gene_files (genefiles = None, output = None, nthreads = 1, thr
     tbl = []
     for short, long in zip(shortname, genefiles):
         tbl_row = cluster_align_each_gene (short, long, output, scratch, taxon_df, threshold, nthreads)
-        tbl.append(tbl_row)
+        if tbl_row is not None: tbl.append(tbl_row)
 
     if scratch_created:
         shutil.rmtree(pathlib.Path(scratch))
@@ -70,7 +70,7 @@ def cluster_align_each_gene (shortname, genefile, outfile, scratch, taxon_df, th
     fas = read_fasta_as_list (genefile)
     if len(fas) < 4:
         logger.warning (f"{genefile} has fewer than 4 sequences, skipping")
-        return stats
+        return None
     logger.info(f"Read {shortname} gene (file {genefile}) with {len(fas)} sequences")
     seqinfo = {}
     for x in fas: seqinfo[x.id] = get_seqinfo_from_sequence_header (x.id, x.description, taxon_df)
@@ -81,7 +81,7 @@ def cluster_align_each_gene (shortname, genefile, outfile, scratch, taxon_df, th
             "n_genus": len(set([x['genus'] for x in seqinfo.values()]))}
     if stats["n_species"] < 4:
         logger.warning (f"{genefile} represents fewer than 4 species, skipping")
-        return
+        return None
     logger.info(f"Found {stats['n_species']} species in {shortname} gene")
     cdfile = f"{scratch}/{shortname}.cdhit"
     alnfile = f"{outfile}.{shortname}.aln"
