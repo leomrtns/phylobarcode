@@ -34,7 +34,7 @@ def split_gtdb_taxonomy_from_dataframe (taxon_df, gtdb_column = "gtdb_taxonomy",
     Splits the GTDB taxonomy string into a list of taxonomic ranks: 
     d__Bacteria;p__Firmicutes;c__Bacilli;o__Bacillales;f__Bacillaceae_H;g__Priestia;s__Priestia megaterium
     '''
-    linneus = {"phylum}":1, "class":2, "order":3, "family":4, "genus":5, "species":6}
+    linneus = {"phylum":1, "class":2, "order":3, "family":4, "genus":5, "species":6}
     for k,v in linneus.items():
         taxon_df[k] = taxon_df[gtdb_column].str.split(";").str[v].str.split("__").str[1]
     if replace is not None:
