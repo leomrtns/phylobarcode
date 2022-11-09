@@ -79,7 +79,7 @@ def run_cluster_align_genes (args):
     generate_prefix_for_task (args, "align")
     if not args.nthreads: args.nthreads = defaults["nthreads"]
     task_align.cluster_align_gene_files (genefiles=args.fasta, output=args.prefix, nthreads=args.nthreads, 
-            tsvfile = args.taxon, scratch=args.scratch)
+            tsvfile = args.taxon, threshold = args.threshold, scratch=args.scratch)
 
 def run_estimate_compare_trees (args):
     from phylobarcode import task_align
@@ -323,6 +323,7 @@ def main():
             help="list of fasta files with genes, as output by `extract_genes` (required)")
     up_findp.add_argument('-x', '--taxon', metavar="tsv", 
             help="tsv file with taxonomy information, as output from 'merge_fasta_gff' (default is to extract taxonomy from fasta headers)")
+    up_findp.add_argument('-t', '--threshold', type=float, default=0.99, help="threshold for cdhit clustering  (default=0.99)")
     up_findp.set_defaults(func = run_cluster_align_genes)
 
     this_help = "Given a set of alignment files, estimates ML trees and compare with a reference tree"
