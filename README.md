@@ -11,7 +11,10 @@ __Leonardo de Oliveira Martins<sup>1</sup>__
 
 It can search for potential long segments ('operons' or 'barcodes') which can serve as phylogenetic markers.
 It can then search for potential primers which can be used to amplify the operon.
-And it can be used to reconstruct the evolutionary history of the amplicons.
+And it can be used to reconstruct the evolutionary history of the amplicons (unfinished).
+
+This is an experimental software under active development, modules and functions may change without notice. 
+Phylobarcode is not production-ready yet, please use at your own risk.
 
 ## Documentation
 
