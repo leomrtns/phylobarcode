@@ -16,6 +16,8 @@ And it can be used to reconstruct the evolutionary history of the amplicons (unf
 This is an experimental software under active development, modules and functions may change without notice. 
 Phylobarcode is not production-ready yet, please use at your own risk.
 
+This software and the ideas behind it were supported by the [COG-UK Early Career Funding Scheme](https://webarchive.nationalarchives.gov.uk/ukgwa/20230507102903/https://www.cogconsortium.uk/schemes-like-this-are-essential-in-helping-future-bioinformaticians-enter-the-field-reflections-from-recipients-of-the-cog-uk-early-career-funding-scheme/) (see also [the announcement here](https://www.linkedin.com/posts/cog-uk-consortium_early-career-funding-scheme-awarded-projects-activity-6942124822818648064-oI12))
+
 ## Documentation
 
 The documentation can be found in https://quadram-institute-bioscience.github.io/phylobarcode/
